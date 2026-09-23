@@ -11,6 +11,12 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+migrated_prompt_history/
+
+# 包管理器统一用 yarn，禁止 npm 生成第二份 lockfile
+package-lock.json
+pnpm-lock.yaml
 
 # Editor directories and files
 .vscode/*

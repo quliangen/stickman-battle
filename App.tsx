@@ -1,52 +1,71 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import GameCanvas from './components/GameCanvas';
 import GameUI from './components/GameUI';
 import MainMenu from './components/MainMenu';
 import GameOver from './components/GameOver';
-import { GameState, GameStats, Entity, GameMode } from './types';
+import { GameState, GameStats, Entity, GameMode, MapType } from './types';
+import { isExhausted, loadProgress, recordPlay, resetProgress, Progress } from './services/progressService';
+
+// 结算界面出现后多久才允许重开（毫秒）。
+// 比 GameOver 按钮自身的 1 秒冷却略短，保证按钮一亮就能点。
+const RESTART_GRACE_MS = 800;
 
 function App() {
   const [gameState, setGameState] = useState<GameState>(GameState.MENU);
   const [gameMode, setGameMode] = useState<GameMode>('PVE');
+  const [map, setMap] = useState<MapType>('neon');
   const [stats, setStats] = useState<GameStats>({ winner: null, mode: 'PVE', duration: 0 });
   const [players, setPlayers] = useState<Entity[]>([]);
-  
-  // 防沉迷统计
-  const [sessionGameCount, setSessionGameCount] = useState<number>(0); 
-  const [sessionStartTime, setSessionStartTime] = useState<number>(Date.now());
-  const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
 
-  // 使用 useEffect 监听游戏结束状态，确保计数逻辑准确执行
+  // 版本进度（存 localStorage）：记录当前版本已经玩了几局
+  const [progress, setProgress] = useState<Progress>(loadProgress);
+  const [sessionStartTime] = useState<number>(() => Date.now());
+
+  // 玩满 PLAYS_PER_VERSION 局就「燃尽」：开局按钮锁住，直到版本号被顶上去
+  const exhausted = isExhausted(progress);
+
+  // 进入结算界面的时刻。小朋友打完一局时手还按在键盘上，
+  // 没有这段缓冲的话，按住的 R / 回车会在胜利画面刚出现的瞬间就把下一局开起来，
+  // 看起来就像「游戏自己重置了」。
+  const gameOverAtRef = useRef(0);
+
+  // 每打完一局记一次账。燃尽后不再累加（否则版本一升级，计数会带着旧账继续涨）
   useEffect(() => {
-    if (gameState === GameState.GAME_OVER) {
-      setSessionGameCount(prevCount => {
-        const newCount = prevCount + 1;
-        console.log(`当前局数: ${newCount}`); // Debug Log
-        
-        // 防沉迷检查：每3局休息10分钟
-        if (newCount > 0 && newCount % 3 === 0) {
-            console.log("触发防沉迷锁定");
-            setLockoutUntil(Date.now() + 10 * 60 * 1000); // 10分钟
-        }
-        return newCount;
-      });
-    }
+    if (gameState !== GameState.GAME_OVER) return;
+    gameOverAtRef.current = Date.now();
+    // recordPlay() 会读写 localStorage，是有副作用的，必须放在 updater 外面：
+    // StrictMode 下 React 会重复调用 updater 来暴露不纯的更新函数，
+    // 写在里面会让每局被记两次账（实测打完一局 plays 直接从 0 跳到 2）。
+    const next = recordPlay();
+    setProgress(prev => (isExhausted(prev) ? prev : next));
   }, [gameState]);
 
   const handleRestart = () => {
-    // 再次检查防沉迷
-    if (lockoutUntil && Date.now() < lockoutUntil) return;
+    // 燃尽期间必须先去升级版本，不给重开
+    if (exhausted) return;
+    // 结算界面出现后的 1 秒内不接受重开，避开小朋友按住不放的按键
+    if (Date.now() - gameOverAtRef.current < RESTART_GRACE_MS) return;
     setGameState(GameState.PLAYING);
   };
+
+  // R 键快捷重开（同样受「燃尽」与冷却约束，且只在结算界面生效）
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'KeyR' && !e.repeat && gameState === GameState.GAME_OVER) {
+        handleRestart();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [gameState, exhausted]);
 
   const handleMenu = () => {
     setGameState(GameState.MENU);
   };
 
+  // 家长重置：清空存档（局数与版本记录），需要二次确认
   const resetSession = () => {
-      setSessionGameCount(0);
-      setSessionStartTime(Date.now());
-      setLockoutUntil(null);
+    setProgress(resetProgress());
   };
 
   return (
@@ -59,6 +78,7 @@ function App() {
           setStats={setStats}
           setPlayers={setPlayers}
           gameMode={gameMode}
+          map={map}
         />
       </div>
 
@@ -69,21 +89,28 @@ function App() {
         </div>
       )}
 
-      {/* 菜单层 */}
+      {/* 菜单层（同样受防沉迷约束：休息期间不能开局） */}
       {gameState === GameState.MENU && (
-        <MainMenu setGameState={setGameState} setGameMode={setGameMode} />
+        <MainMenu
+          setGameState={setGameState}
+          setGameMode={setGameMode}
+          map={map}
+          setMap={setMap}
+          progress={progress}
+          exhausted={exhausted}
+        />
       )}
 
       {/* 游戏结束层 */}
       {gameState === GameState.GAME_OVER && (
-        <GameOver 
-          stats={stats} 
-          onRestart={handleRestart} 
+        <GameOver
+          stats={stats}
+          onRestart={handleRestart}
           onMenu={handleMenu}
-          sessionGameCount={sessionGameCount}
+          progress={progress}
+          exhausted={exhausted}
           sessionStartTime={sessionStartTime}
           onResetSession={resetSession}
-          lockoutUntil={lockoutUntil}
         />
       )}
     </div>

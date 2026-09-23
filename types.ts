@@ -7,19 +7,41 @@ export enum GameState {
 
 export type GameMode = 'PVE' | 'PVP';
 
+export type MapType = 'neon' | 'forest' | 'desert' | 'ocean' | 'volcano';
+
 export interface Vector {
   x: number;
   y: number;
 }
 
 // 移除了 stick, blade, pistol，新增 bomber, pokemon, zeperion
-export type WeaponType = 'bomb' | 'sword' | 'atom_bomb' | 'missile' | 'dragon' | 'bomber' | 'pokemon' | 'laser' | 'zeperion';
+export type WeaponType = 'bomb' | 'sword' | 'atom_bomb' | 'missile' | 'dragon' | 'bomber' | 'pokemon' | 'laser' | 'zeperion' | 'c4' | 'piercer' | 'aug' | 'gas';
 
 export interface Platform {
   x: number;
   y: number;
   width: number;
   height: number;
+}
+
+// 障碍类型：spike = 伤害陷阱（尖刺/岩浆）/ block = 实心阻挡（箱子、柱子）/ mover = 移动平台
+export type ObstacleKind = 'spike' | 'block' | 'mover';
+
+export interface Obstacle {
+  kind: ObstacleKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  // 移动平台专用：往返运动参数，以及本帧位移（用于把站在上面的角色一起带走）
+  baseX?: number;
+  baseY?: number;
+  axis?: 'x' | 'y';
+  range?: number;
+  speed?: number;
+  phase?: number;
+  dx?: number;
+  dy?: number;
 }
 
 export interface Entity {
@@ -46,6 +68,7 @@ export interface Entity {
   ammo: number; // 弹药量 或 近战武器耐久度
   weaponDuration: number; // 新增：武器剩余存在时间 (帧)
   stunFrames: number; // 受击硬直/击飞状态
+  spikeCooldown: number; // 踩到陷阱后的无敌帧，避免站在尖刺上被瞬间抽干血
 }
 
 export interface FallingItem {
@@ -88,13 +111,25 @@ export interface Projectile {
   zeperionState?: 'growing' | 'exploding';
   zeperionLife?: number;
   zeperionMaxLife?: number;
+  // C4 炸弹特有属性
+  c4State?: 'flying' | 'planted';
+  c4Fuse?: number;
+
+  // 穿地弹特有属性
+  piercerState?: 'flying' | 'burrowing' | 'erupting';
+  piercerDir?: number; // 潜行水平方向 1 / -1
+  piercerTimer?: number;
+
+  // 毒气弹特有属性
+  gasState?: 'flying' | 'cloud';
+  gasTimer?: number;
+  gasRadius?: number;
 
   // 轨迹
   trail?: Vector[]; 
 }
 
 export interface Particle {
-  id: string;
   pos: Vector;
   vel: Vector;
   life: number;
@@ -107,6 +142,11 @@ export interface Particle {
   growth?: number; // 尺寸增长速率
   alphaDecay?: number; // 透明度衰减速率 (默认是 life/maxLife，此项可覆盖)
   currentAlpha?: number;
+
+  // 环形冲击波特效
+  kind?: 'circle' | 'ring'; // ring = 描边圆环（冲击波光波）
+  lineWidth?: number; // 环线宽
+  lineWidthDecay?: number; // 环线宽衰减速率
 }
 
 export interface GameStats {

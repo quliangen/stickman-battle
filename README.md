@@ -14,7 +14,6 @@ View your app in AI Studio: https://ai.studio/apps/220175f8-94b0-4bca-93c1-80d3f
 
 
 1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+   `yarn`
+2. Run the app:
+   `yarn dev`

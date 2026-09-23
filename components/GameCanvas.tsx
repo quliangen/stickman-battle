@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useCallback } from 'react';
-import { GameState, Entity, Vector, Particle, GameStats, GameMode, FallingItem, Projectile, WeaponType, Platform } from '../types';
+import { GameState, Entity, Vector, Particle, GameStats, GameMode, MapType, FallingItem, Projectile, WeaponType, Platform, Obstacle } from '../types';
 import { playJumpSound, playAttackSound, playHitSound, playShootSound, playExplodeSound, playDragonRoar } from '../services/audioService';
 
 interface GameCanvasProps {
@@ -8,17 +8,547 @@ interface GameCanvasProps {
   setStats: React.Dispatch<React.SetStateAction<GameStats>>;
   setPlayers: (players: Entity[]) => void;
   gameMode: GameMode;
+  map: MapType;
 }
 
+// ================= 炫酷动态背景 =================
+// 固定种子的伪随机数生成器：保证星星位置在每一帧都稳定不变
+const mulberry32 = (seed: number) => {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+interface Star {
+  x: number; // 归一化坐标 0..1（按画布实际尺寸放大）
+  y: number;
+  size: number;
+  speed: number;
+  phase: number;
+}
+
+// 预生成一批星星
+const STAR_COUNT = 170;
+const STARS: Star[] = (() => {
+  const rand = mulberry32(20260919);
+  const arr: Star[] = [];
+  for (let i = 0; i < STAR_COUNT; i++) {
+    arr.push({
+      x: rand(),
+      y: rand(),
+      size: 0.4 + rand() * 1.6,
+      speed: 0.015 + rand() * 0.05,
+      phase: rand() * Math.PI * 2,
+    });
+  }
+  return arr;
+})();
+
+// 星云 / 极光光斑配置（screen 混合产生辉光）
+const NEBULAE = [
+  { sx: 0.22, sy: 0.25, sr: 0.42, c: '56, 189, 248', a: 0.20 }, // 青色
+  { sx: 0.78, sy: 0.30, sr: 0.46, c: '168, 85, 247', a: 0.20 }, // 紫色
+  { sx: 0.50, sy: 0.62, sr: 0.52, c: '236, 72, 153', a: 0.12 }, // 粉红
+  { sx: 0.85, sy: 0.78, sr: 0.36, c: '34, 211, 238', a: 0.10 }, // 蓝绿
+];
+
+const drawDynamicBackground = (
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  frame: number
+) => {
+  const t = frame * 0.004;
+
+  // 1. 深空渐变底
+  const bg = ctx.createLinearGradient(0, 0, 0, h);
+  bg.addColorStop(0, '#050816');
+  bg.addColorStop(0.45, '#0b1230');
+  bg.addColorStop(1, '#1c0f2e');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+
+  // 2. 漂移的星云 / 极光
+  ctx.globalCompositeOperation = 'screen';
+  NEBULAE.forEach((n, i) => {
+    const ox = Math.sin(t * (0.5 + i * 0.13) + i * 2.1) * w * 0.16;
+    const oy = Math.cos(t * (0.4 + i * 0.11) + i * 1.7) * h * 0.12;
+    const x = n.sx * w + ox;
+    const y = n.sy * h + oy;
+    const r = n.sr * Math.min(w, h) * 1.1;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `rgba(${n.c}, ${n.a})`);
+    g.addColorStop(0.6, `rgba(${n.c}, ${n.a * 0.4})`);
+    g.addColorStop(1, `rgba(${n.c}, 0)`);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalCompositeOperation = 'source-over';
+
+  // 3. 闪烁的星星
+  for (let i = 0; i < STARS.length; i++) {
+    const s = STARS[i];
+    const tw = 0.25 + 0.75 * Math.abs(Math.sin(frame * s.speed + s.phase));
+    ctx.globalAlpha = 0.1 + 0.9 * tw;
+    ctx.fillStyle = '#e8ecff';
+    ctx.beginPath();
+    ctx.arc(s.x * w, s.y * h, s.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // 4. 流星（周期性划过）
+  const meteorPeriod = 260;
+  const meteorPhase = frame % meteorPeriod;
+  if (meteorPhase < 55) {
+    const p = meteorPhase / 55; // 0..1
+    const len = 120 + p * 40;
+    const x0 = w * (1.05 - 0.9 * p);
+    const y0 = h * (0.05 + 0.45 * p);
+    const grad = ctx.createLinearGradient(x0 - len, y0 - len * 0.5, x0, y0);
+    grad.addColorStop(0, 'rgba(255, 255, 255, 0)');
+    grad.addColorStop(1, 'rgba(255, 255, 255, 0.9)');
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x0 - len, y0 - len * 0.5);
+    ctx.lineTo(x0, y0);
+    ctx.stroke();
+  }
+};
+
+// ================= 森林动态背景 =================
+interface ForestLeaf {
+  x: number; // 归一化 0..1
+  y: number;
+  size: number;
+  fallSpeed: number; // 像素 / 帧
+  phase: number;
+  drift: number;
+  color: string;
+}
+
+const FOREST_LEAVES: ForestLeaf[] = (() => {
+  const rand = mulberry32(20260213);
+  const colors = ['#7ec850', '#c9e265', '#e0a94b', '#8fb843'];
+  return Array.from({ length: 40 }, () => ({
+    x: rand(),
+    y: rand(),
+    size: 4 + rand() * 6,
+    fallSpeed: 0.4 + rand() * 1.4,
+    phase: rand() * Math.PI * 2,
+    drift: 12 + rand() * 30,
+    color: colors[Math.floor(rand() * colors.length)],
+  }));
+})();
+
+const drawForestBackground = (
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  frame: number
+) => {
+  const t = frame * 0.01;
+
+  // 1. 天空渐变
+  const sky = ctx.createLinearGradient(0, 0, 0, h);
+  sky.addColorStop(0, '#8fd3b5');
+  sky.addColorStop(0.55, '#bde4b0');
+  sky.addColorStop(1, '#e6f2c8');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, w, h);
+
+  // 2. 树冠间洒下的阳光 + 斜射光柱
+  ctx.globalCompositeOperation = 'screen';
+  const sun = ctx.createRadialGradient(w * 0.55, h * 0.05, 0, w * 0.55, h * 0.05, w * 0.7);
+  sun.addColorStop(0, 'rgba(255, 250, 205, 0.55)');
+  sun.addColorStop(1, 'rgba(255, 250, 205, 0)');
+  ctx.fillStyle = sun;
+  ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < 3; i++) {
+    const bx = w * 0.25 + i * w * 0.22 + Math.sin(t + i * 1.3) * w * 0.04;
+    const ray = ctx.createLinearGradient(bx, 0, bx + w * 0.2, h);
+    ray.addColorStop(0, 'rgba(255, 255, 220, 0.14)');
+    ray.addColorStop(1, 'rgba(255, 255, 220, 0)');
+    ctx.fillStyle = ray;
+    ctx.beginPath();
+    ctx.moveTo(bx - w * 0.1, 0);
+    ctx.lineTo(bx + w * 0.25, 0);
+    ctx.lineTo(bx + w * 0.12, h);
+    ctx.lineTo(bx - w * 0.3, h);
+    ctx.fill();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+
+  // 3. 远山 / 树林剪影
+  const treeline = (baseY: number, r: number, color: string) => {
+    ctx.fillStyle = color;
+    for (let i = 0; i < 9; i++) {
+      const cx = (i * w) / 9 + Math.sin(t * 0.4 + i * 2.3) * 10;
+      const tr = r * (0.7 + ((i * 13) % 5) * 0.12);
+      ctx.beginPath();
+      ctx.arc(cx, baseY, tr, Math.PI, 0);
+      ctx.fill();
+    }
+  };
+  treeline(h * 0.82, h * 0.3, 'rgba(90, 150, 100, 0.25)');
+  treeline(h * 0.88, h * 0.36, 'rgba(70, 120, 85, 0.35)');
+
+  // 4. 两侧近景树干（剪影，营造森林包围感）
+  const drawTrunk = (x: number, scale: number) => {
+    ctx.fillStyle = 'rgba(58, 80, 50, 0.45)';
+    ctx.fillRect(x - 14 * scale, h * 0.12, 28 * scale, h * 0.9);
+    ctx.fillStyle = 'rgba(42, 66, 42, 0.5)';
+    const cy = h * 0.12;
+    ctx.beginPath(); ctx.arc(x, cy, 92 * scale, Math.PI, 0); ctx.fill();
+    ctx.beginPath(); ctx.arc(x - 58 * scale, cy + 30 * scale, 55 * scale, Math.PI, 0); ctx.fill();
+    ctx.beginPath(); ctx.arc(x + 58 * scale, cy + 30 * scale, 55 * scale, Math.PI, 0); ctx.fill();
+  };
+  drawTrunk(w * 0.045, 1.05);
+  drawTrunk(w * 0.955, 0.95);
+
+  // 5. 飘落的树叶
+  // 旋转交给 ellipse() 自己的 rotation 参数，不再每片叶子 save/translate/rotate/restore：
+  // 那四个调用（尤其是 save/restore 要压栈整个绘图状态）在几十片叶子上是白花的。
+  ctx.globalAlpha = 0.75;
+  FOREST_LEAVES.forEach((leaf) => {
+    const fx = leaf.x * w + Math.sin(frame * 0.012 + leaf.phase) * leaf.drift;
+    const fy = ((leaf.y * h + frame * leaf.fallSpeed) % (h + 80)) - 40;
+    ctx.fillStyle = leaf.color;
+    ctx.beginPath();
+    ctx.ellipse(fx, fy, leaf.size, leaf.size * 0.5, Math.sin(frame * 0.03 + leaf.phase) * 0.9, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+};
+
+// ================= 沙漠动态背景 =================
+interface DesertSand {
+  x: number;
+  y: number;
+  size: number;
+  speed: number; // 横向漂移速度
+  phase: number;
+  color: string;
+}
+
+const DESERT_SAND: DesertSand[] = (() => {
+  const rand = mulberry32(20260308);
+  const colors = ['#f4d49a', '#eac378', '#ffe8b8'];
+  return Array.from({ length: 50 }, () => ({
+    x: rand(),
+    y: rand() * 0.7,
+    size: 1.5 + rand() * 2.5,
+    speed: 0.5 + rand() * 1.2,
+    phase: rand() * Math.PI * 2,
+    color: colors[Math.floor(rand() * colors.length)],
+  }));
+})();
+
+const drawDesertBackground = (
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  frame: number
+) => {
+  const t = frame * 0.008;
+
+  // 1. 暖色天空渐变
+  const sky = ctx.createLinearGradient(0, 0, 0, h);
+  sky.addColorStop(0, '#ffc96b');
+  sky.addColorStop(0.5, '#ffe0a3');
+  sky.addColorStop(1, '#fff3d6');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, w, h);
+
+  // 2. 太阳光晕 + 圆盘
+  const sunX = w * 0.5 + Math.sin(t * 0.4) * w * 0.02;
+  const sunY = h * 0.3;
+  ctx.globalCompositeOperation = 'screen';
+  const halo = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, w * 0.5);
+  halo.addColorStop(0, 'rgba(255, 250, 230, 0.9)');
+  halo.addColorStop(0.3, 'rgba(255, 240, 200, 0.45)');
+  halo.addColorStop(1, 'rgba(255, 230, 160, 0)');
+  ctx.fillStyle = halo;
+  ctx.fillRect(0, 0, w, h);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = 'rgba(255, 246, 210, 0.9)';
+  ctx.beginPath();
+  ctx.arc(sunX, sunY, 44, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 3. 分层沙丘
+  const dune = (baseY: number, amp: number, color: string) => {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+    ctx.lineTo(0, baseY);
+    for (let x = 0; x <= w; x += 20) {
+      const y = baseY - Math.sin((x / w) * Math.PI * 2 + amp * 0.1) * amp
+                   - Math.sin((x / w) * Math.PI * 4) * amp * 0.4;
+      ctx.lineTo(x, y);
+    }
+    ctx.lineTo(w, h);
+    ctx.closePath();
+    ctx.fill();
+  };
+  dune(h * 0.86, h * 0.06, 'rgba(232, 178, 110, 0.55)');
+  dune(h * 0.92, h * 0.09, 'rgba(215, 158, 90, 0.7)');
+
+  // 4. 仙人掌剪影
+  const cactus = (x: number, scale: number, color: string) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(x - 5 * scale, h * 0.55, 10 * scale, h * 0.45);
+    ctx.fillRect(x - 22 * scale, h * 0.62, 10 * scale, h * 0.2);
+    ctx.fillRect(x + 12 * scale, h * 0.58, 10 * scale, h * 0.18);
+    ctx.fillRect(x - 40 * scale, h * 0.62, 16 * scale, 6 * scale);
+    ctx.fillRect(x + 22 * scale, h * 0.58, 16 * scale, 6 * scale);
+  };
+  cactus(w * 0.06, 0.9, 'rgba(120, 150, 90, 0.5)');
+  cactus(w * 0.94, 0.8, 'rgba(110, 140, 82, 0.5)');
+  cactus(w * 0.16, 0.5, 'rgba(130, 158, 96, 0.4)');
+
+  // 5. 飘动的沙尘
+  DESERT_SAND.forEach((s) => {
+    const sx = ((s.x * w + frame * s.speed) % (w + 40)) - 20;
+    const sy = s.y * h * 0.7 + Math.sin(frame * 0.02 + s.phase) * 8;
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = s.color;
+    ctx.beginPath();
+    ctx.arc(sx, sy, s.size, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+};
+
+// ================= 海洋动态背景 =================
+interface OceanBubble {
+  x: number;
+  y: number;
+  size: number;
+  speed: number; // 上升速度
+  phase: number;
+}
+
+const OCEAN_BUBBLES: OceanBubble[] = (() => {
+  const rand = mulberry32(20260415);
+  return Array.from({ length: 60 }, () => ({
+    x: rand(),
+    y: rand(),
+    size: 1.5 + rand() * 3.5,
+    speed: 0.6 + rand() * 1.6,
+    phase: rand() * Math.PI * 2,
+  }));
+})();
+
+const drawOceanBackground = (
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  frame: number
+) => {
+  // 1. 水下渐变
+  const water = ctx.createLinearGradient(0, 0, 0, h);
+  water.addColorStop(0, '#8fd8ec');
+  water.addColorStop(0.45, '#3f9fd0');
+  water.addColorStop(1, '#0b3350');
+  ctx.fillStyle = water;
+  ctx.fillRect(0, 0, w, h);
+
+  // 2. 从水面射入的光柱
+  ctx.globalCompositeOperation = 'screen';
+  for (let i = 0; i < 4; i++) {
+    const bx = w * (0.15 + i * 0.22) + Math.sin(frame * 0.008 + i) * w * 0.03;
+    const ray = ctx.createLinearGradient(bx, 0, bx + w * 0.12, h);
+    ray.addColorStop(0, 'rgba(210, 245, 255, 0.18)');
+    ray.addColorStop(1, 'rgba(180, 230, 255, 0)');
+    ctx.fillStyle = ray;
+    ctx.beginPath();
+    ctx.moveTo(bx - w * 0.06, 0);
+    ctx.lineTo(bx + w * 0.1, 0);
+    ctx.lineTo(bx + w * 0.24, h);
+    ctx.lineTo(bx - w * 0.08, h);
+    ctx.fill();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+
+  // 3. 上升的气泡
+  OCEAN_BUBBLES.forEach((b) => {
+    const bx = b.x * w + Math.sin(frame * 0.02 + b.phase) * 18;
+    const by = h - ((b.y * h + frame * b.speed) % (h + 80)) + 40;
+    ctx.strokeStyle = 'rgba(220, 245, 255, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(bx, by, b.size, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.beginPath();
+    ctx.arc(bx - b.size * 0.3, by - b.size * 0.3, b.size * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // 4. 游动的小鱼
+  for (let i = 0; i < 4; i++) {
+    const dir = i % 2 === 0 ? 1 : -1;
+    const speed = 18 + i * 6;
+    const px = ((frame * speed * dir + i * w * 0.28) % (w + 140) + (w + 140)) % (w + 140) - 70;
+    const py = h * (0.2 + i * 0.16) + Math.sin(frame * 0.03 + i) * 14;
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.scale(dir, 1);
+    ctx.fillStyle = 'rgba(245, 175, 90, 0.5)';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 14, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(-12, 0); ctx.lineTo(-22, -7); ctx.lineTo(-22, 7); ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+};
+
+// ================= 火山动态背景 =================
+interface VolcanoEmber {
+  x: number;
+  y: number;
+  size: number;
+  speed: number; // 上升速度
+  phase: number;
+  color: string;
+}
+
+const VOLCANO_EMBERS: VolcanoEmber[] = (() => {
+  const rand = mulberry32(20260502);
+  const colors = ['#ff6b35', '#ff8c42', '#ffb347', '#ff4d3a'];
+  return Array.from({ length: 45 }, () => ({
+    x: rand(),
+    y: rand(),
+    size: 1 + rand() * 2.5,
+    speed: 0.8 + rand() * 1.8,
+    phase: rand() * Math.PI * 2,
+    color: colors[Math.floor(rand() * colors.length)],
+  }));
+})();
+
+const drawVolcanoBackground = (
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  frame: number
+) => {
+  // 1. 暗红天空渐变
+  const sky = ctx.createLinearGradient(0, 0, 0, h);
+  sky.addColorStop(0, '#1c0e12');
+  sky.addColorStop(0.5, '#3d1a16');
+  sky.addColorStop(1, '#7a2d14');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, w, h);
+
+  // 2. 火山锥剪影
+  ctx.fillStyle = '#240f12';
+  ctx.beginPath();
+  ctx.moveTo(w * 0.12, h * 0.92);
+  ctx.lineTo(w * 0.5, h * 0.34);
+  ctx.lineTo(w * 0.88, h * 0.92);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#150a0c';
+  ctx.fillRect(w * 0.5 - 26, h * 0.34 - 4, 52, 10);
+
+  // 3. 火山口岩浆辉光（脉动）
+  const cx = w * 0.5;
+  const cy = h * 0.36;
+  const pulse = 0.75 + Math.sin(frame * 0.04) * 0.2;
+  ctx.globalCompositeOperation = 'screen';
+  const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, w * 0.32);
+  glow.addColorStop(0, `rgba(255, 130, 40, ${0.85 * pulse})`);
+  glow.addColorStop(0.4, `rgba(255, 70, 20, ${0.4 * pulse})`);
+  glow.addColorStop(1, 'rgba(255, 40, 10, 0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, w, h);
+
+  // 喷发的火星
+  for (let i = 0; i < 12; i++) {
+    const a = frame * 0.12 + i * 0.55;
+    const rise = Math.abs(Math.sin(a));
+    const px = cx + Math.sin(a * 0.8 + i) * 40;
+    const py = cy - rise * h * 0.22;
+    ctx.fillStyle = `rgba(255, ${120 + (i * 17) % 100}, 40, ${1 - rise})`;
+    ctx.beginPath();
+    ctx.arc(px, py, 2.5 + (i % 3), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+
+  // 4. 上升的火星 / 灰烬
+  VOLCANO_EMBERS.forEach((e) => {
+    const ex = e.x * w + Math.sin(frame * 0.02 + e.phase) * 20;
+    const ey = h - ((e.y * h + frame * e.speed) % (h + 60)) + 30;
+    ctx.globalAlpha = 0.6;
+    ctx.fillStyle = e.color;
+    ctx.beginPath();
+    ctx.arc(ex, ey, e.size, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+};
+
 // === 物理参数 (提速版) ===
-const GRAVITY = 0.8; 
-const FRICTION = 0.82; 
-const MOVE_SPEED = 2; 
-const JUMP_FORCE = -22; 
-const GROUND_Y = 600;
-const ATTACK_COOLDOWN = 18; 
+const GRAVITY = 0.8;
+const FRICTION = 0.82;
+const MOVE_SPEED = 2;
+const JUMP_FORCE = -22;
+
+// === 世界尺寸 ===
+// 关卡坐标以 1280x720 为基准设计，运行时按画布尺寸自适应缩放：
+// 窗口过矮时地面抬升，窗口过窄时平台整体收窄，避免角色掉出屏幕或平台跑到屏幕外。
+const BASE_W = 1280;
+const BASE_GROUND_Y = 600;
+let GROUND_Y = BASE_GROUND_Y; // 每帧根据画布高度同步
+
+const syncWorldSize = (canvas: HTMLCanvasElement) => {
+    GROUND_Y = Math.min(BASE_GROUND_Y, Math.max(280, canvas.height - 90));
+};
+
+const ATTACK_COOLDOWN = 18;
 const ATTACK_RANGE = 100;
 const ATTACK_DAMAGE = 8;
+
+// === 障碍参数 ===
+const BODY_HALF_W = 13;    // 角色碰撞半宽（与 1.3 倍绘制比例下的躯干宽度一致）
+const SPIKE_DAMAGE = 6;    // 陷阱单次伤害：刻意压低，避免小朋友一踩就死
+const SPIKE_COOLDOWN = 50; // 陷阱无敌帧（约 0.83 秒）
+const MAX_PARTICLES = 1000; // 粒子数量上限，防止特效累积卡顿
+
+/*
+  左右墙的内缩量。角色是"以 pos.x 为中心"画的，头是半径 12 的圆再乘 1.3 倍绘制比例
+  （≈15.6px，算上 4px 描边外沿 ≈17.6px）。以前这里写死 10，贴着墙站会被切掉小半个脑袋。
+*/
+const WALL_MARGIN = 20;
+
+// 逻辑帧固定 60Hz：与显示器刷新率解耦
+const FIXED_STEP = 1000 / 60;
+const MAX_STEPS_PER_FRAME = 5; // 单帧最多补算 5 步，避免长时间卡顿后"越补越卡"
+
+/*
+  HUD 同步签名：把玩家身上"看得见的字段"拼成一个字符串。
+  只有签名变化才 setState，这样角色站着不动时 React 完全不参与，
+  而不是每 6 帧无条件重渲染一次 HUD。
+  武器耐久按 1/10 分档（配 CSS transition 补间），避免每帧都变。
+*/
+const hudSignature = (players: Entity[], stats: GameStats) => {
+  let s = `${stats.winner ?? ''}|${stats.mode}|${Math.floor(stats.duration)}`;
+  for (const p of players) {
+    s += `#${p.id},${Math.ceil(p.health)},${p.ammo},${p.heldWeapon ?? ''},${Math.round(p.weaponDuration / 6)},${p.isDead ? 1 : 0},${p.isWinner ? 1 : 0}`;
+  }
+  return s;
+};
 
 // === 武器生成配置 ===
 const MAX_WEAPONS_PER_GAME = 6; 
@@ -26,13 +556,620 @@ const WEAPON_SPAWN_INTERVAL = 900;
 const WEAPON_LIFETIME = 15 * 60; 
 
 // === 关卡设计 ===
-const PLATFORMS: Platform[] = [
+const NEON_PLATFORMS: Platform[] = [
     { x: 300, y: 450, width: 200, height: 20 },
     { x: 800, y: 450, width: 200, height: 20 },
-    { x: 500, y: 250, width: 300, height: 20 } 
+    { x: 500, y: 250, width: 300, height: 20 }
 ];
 
-const drawEntity = (ctx: CanvasRenderingContext2D, entity: Entity) => {
+// 森林地图平台：原木 / 树桩
+const FOREST_PLATFORMS: Platform[] = [
+    { x: 320, y: 470, width: 180, height: 22 },
+    { x: 780, y: 470, width: 180, height: 22 },
+    { x: 540, y: 300, width: 260, height: 22 },
+    { x: 240, y: 300, width: 150, height: 22 }
+];
+
+// 沙漠地图平台：砂岩平台
+const DESERT_PLATFORMS: Platform[] = [
+    { x: 320, y: 460, width: 190, height: 22 },
+    { x: 770, y: 460, width: 190, height: 22 },
+    { x: 500, y: 270, width: 280, height: 22 }
+];
+
+// 海洋地图平台：礁石 / 珊瑚平台
+const OCEAN_PLATFORMS: Platform[] = [
+    { x: 300, y: 470, width: 180, height: 22 },
+    { x: 800, y: 470, width: 180, height: 22 },
+    { x: 540, y: 250, width: 200, height: 22 }
+];
+
+// 火山地图平台：玄武岩平台
+const VOLCANO_PLATFORMS: Platform[] = [
+    { x: 300, y: 470, width: 180, height: 22 },
+    { x: 800, y: 470, width: 180, height: 22 },
+    { x: 540, y: 260, width: 200, height: 22 }
+];
+
+const basePlatformsOf = (m: MapType): Platform[] =>
+    m === 'forest' ? FOREST_PLATFORMS
+    : m === 'desert' ? DESERT_PLATFORMS
+    : m === 'ocean' ? OCEAN_PLATFORMS
+    : m === 'volcano' ? VOLCANO_PLATFORMS
+    : NEON_PLATFORMS;
+
+// ================= 每局随机地形 =================
+/*
+  每张地图的固定平台作为"骨架"保留，每局再随机追加一批平台与障碍，
+  这样地图辨识度不丢，但每局地形都不一样。
+  所有随机坐标都生成在 1280 × 600 基准坐标系下，取用时按画布尺寸等比缩放（与固定平台一致）。
+*/
+interface Layout {
+    extras: Platform[];   // 随机追加的平台
+    spikes: Obstacle[];   // 伤害陷阱
+    blocks: Obstacle[];   // 实心阻挡
+    movers: Obstacle[];   // 移动平台
+}
+
+const EMPTY_LAYOUT: Layout = { extras: [], spikes: [], blocks: [], movers: [] };
+
+// 生成参数：数量与尺寸都刻意保守，保证 7~8 岁小朋友一眼能看清地形
+const SPAWN_SAFE_X = 210;   // 出生点安全区：左右各 210px 内不放障碍
+const PLACE_PAD = 44;       // 与已有平台/障碍的最小间距，保证跳得过去、不卡人
+const PLACE_TRIES = 30;     // 每个元素的随机尝试次数
+const MOVER_TRIES = 20;     // 移动平台包络较大，多试几次换尺寸/方向
+const TIERS = [470, 400, 320, 240]; // 可选的平台高度层级
+
+const rand = (a: number, b: number) => a + Math.random() * (b - a);
+const randInt = (a: number, b: number) => Math.floor(rand(a, b + 1));
+
+interface Rect { x: number; y: number; width: number; height: number; }
+
+// 两个矩形在 pad 间距内是否相交
+const hits = (a: Rect, b: Rect, pad: number) =>
+    a.x < b.x + b.width + pad && a.x + a.width + pad > b.x &&
+    a.y < b.y + b.height + pad && a.y + a.height + pad > b.y;
+
+// 在基准坐标系里生成一局的地形
+const generateLayout = (m: MapType): Layout => {
+    const taken: Rect[] = basePlatformsOf(m).map(p => ({ ...p }));
+    const layout: Layout = { extras: [], spikes: [], blocks: [], movers: [] };
+
+    // 在安全区内找一个不与已占用矩形冲突的位置
+    const place = (w: number, h: number, yMin: number, yMax: number): Rect | null => {
+        for (let i = 0; i < PLACE_TRIES; i++) {
+            const r: Rect = { x: rand(SPAWN_SAFE_X, BASE_W - SPAWN_SAFE_X - w), y: rand(yMin, yMax), width: w, height: h };
+            if (taken.every(t => !hits(r, t, PLACE_PAD))) { taken.push(r); return r; }
+        }
+        return null;
+    };
+
+    // 1. 随机追加平台：1~3 个
+    //    每张地图的固定平台会占掉一部分空档，宽平台未必塞得进某个层级，
+    //    所以逐个层级乱序重试，而不是随机挑一层失败就整局放弃
+    const extraCount = randInt(1, 3);
+    for (let i = 0; i < extraCount; i++) {
+        const w = rand(130, 230);
+        const tiers = [...TIERS].sort(() => Math.random() - 0.5);
+        for (const y of tiers) {
+            const r = place(w, 22, y, y);
+            if (r) { layout.extras.push({ x: r.x, y: r.y, width: r.width, height: 22 }); break; }
+        }
+    }
+
+    // 2. 实心阻挡：1~2 个，坐在地面上（y 由地面反推，缩放后底边仍贴地）
+    for (let i = 0, n = randInt(1, 2); i < n; i++) {
+        const w = rand(46, 76);
+        const h = rand(70, 120);
+        const r = place(w, h, BASE_GROUND_Y - h, BASE_GROUND_Y - h);
+        if (r) layout.blocks.push({ kind: 'block', x: r.x, y: r.y, width: r.width, height: r.height });
+    }
+
+    // 3. 伤害陷阱：1~2 个，贴地摆放
+    for (let i = 0, n = randInt(1, 2); i < n; i++) {
+        const w = rand(70, 130);
+        const h = 20;
+        const r = place(w, h, BASE_GROUND_Y - h, BASE_GROUND_Y - h);
+        if (r) layout.spikes.push({ kind: 'spike', x: r.x, y: r.y, width: r.width, height: r.height });
+    }
+
+    // 4. 移动平台：0~2 个，横向或纵向往返
+    for (let i = 0, n = randInt(0, 2); i < n; i++) {
+        // 横向移动的包络很宽（平台宽 + 两倍行程），一次放不下就换个尺寸/方向再试
+        for (let attempt = 0; attempt < MOVER_TRIES; attempt++) {
+            const w = rand(120, 170);
+            const axis: 'x' | 'y' = Math.random() < 0.6 ? 'x' : 'y';
+            const range = axis === 'x' ? rand(55, 110) : rand(40, 80);
+
+            // 预留的是整条"运动包络"而不是平台自身：
+            // 否则平台扫过去时会穿过固定平台或箱子，站在上面的角色也会被顶进平台里
+            const envW = axis === 'x' ? w + range * 2 : w;
+            const envH = axis === 'y' ? 20 + range * 2 : 20;
+            const envY = axis === 'y' ? rand(290, 470 - range) : rand(300, 460);
+
+            const r = place(envW, envH, envY, envY);
+            if (!r) continue;
+
+            const baseX = axis === 'x' ? r.x + range : r.x;
+            const baseY = axis === 'y' ? r.y + range : r.y;
+            layout.movers.push({
+                kind: 'mover',
+                x: baseX, y: baseY, width: w, height: 20,
+                baseX, baseY, axis, range,
+                speed: rand(0.012, 0.024),
+                phase: rand(0, Math.PI * 2),
+                dx: 0, dy: 0,
+            });
+            break;
+        }
+    }
+
+    return layout;
+};
+
+// 本局地形（基准坐标）。每局开始时由 initGame 重新生成。
+let baseLayout: Layout = EMPTY_LAYOUT;
+let layoutVersion = 0;
+
+// 缩放后的地形缓存：与平台共用同一套缩放规则
+let layoutCacheKey = '';
+let layoutCache: Layout = EMPTY_LAYOUT;
+let platformCache: Platform[] = [];
+
+const scaleX = (canvasWidth: number) => Math.max(0.55, Math.min(1.5, canvasWidth / BASE_W));
+
+/*
+  取当前地图的"可站立面"：固定平台 + 随机追加平台 + 实心箱子顶面。
+  移动平台每帧在动，不在这个列表里，由 update() 单独处理。
+*/
+const getPlatforms = (m: MapType, canvasWidth: number): Platform[] => {
+    syncLayout(m, canvasWidth);
+    return platformCache;
+};
+
+// 取当前地图的障碍（陷阱 / 阻挡 / 移动平台）
+const getLayout = (m: MapType, canvasWidth: number): Layout => {
+    syncLayout(m, canvasWidth);
+    return layoutCache;
+};
+
+const syncLayout = (m: MapType, canvasWidth: number) => {
+    const key = `${m}|${Math.round(canvasWidth)}|${Math.round(GROUND_Y)}|${layoutVersion}`;
+    if (key === layoutCacheKey) return;
+
+    const sx = scaleX(canvasWidth);
+    const sy = GROUND_Y / BASE_GROUND_Y;
+
+    // 平台高度不缩放（保持原有观感）；贴地障碍的高度随纵向缩放，保证底边仍然贴地
+    const scaleP = (p: Platform): Platform => ({
+        x: p.x * sx, y: p.y * sy, width: p.width * sx, height: p.height,
+    });
+    const scaleO = (o: Obstacle): Obstacle => ({
+        ...o,
+        x: o.x * sx, y: o.y * sy, width: o.width * sx, height: o.height * sy,
+        baseX: o.baseX !== undefined ? o.baseX * sx : undefined,
+        baseY: o.baseY !== undefined ? o.baseY * sy : undefined,
+        range: o.range !== undefined ? o.range * (o.axis === 'y' ? sy : sx) : undefined,
+    });
+
+    const extras = baseLayout.extras.map(scaleP);
+    const blocks = baseLayout.blocks.map(scaleO);
+    const spikes = baseLayout.spikes.map(scaleO);
+    const movers = baseLayout.movers.map(scaleO);
+
+    platformCache = [
+        ...basePlatformsOf(m).map(scaleP),
+        ...extras,
+        ...blocks, // 箱子顶面也可以站
+    ];
+    layoutCache = { extras, spikes, blocks, movers };
+    layoutCacheKey = key;
+};
+
+/*
+  静态平台层的离屏画布。平台材质每帧重画的结果完全一样（位置来自 platformCache，
+  只在换图 / 改窗口尺寸 / 换局时变），所以缓存成位图，每帧只贴一次。
+  缓存键直接复用 layoutCacheKey —— 它变了就说明平台位置变了，必须重画。
+*/
+// 复用同一个返回对象：命中缓存时不再每帧新建一个 { canvas, box }（那就成了"为了省分配反而每帧分配"）
+let terrainCanvas: HTMLCanvasElement | null = null;
+let terrainKey = '';
+const terrainLayer = { canvas: null as HTMLCanvasElement | null, x: 0, y: 0 };
+
+const getTerrainLayer = (m: MapType, canvas: HTMLCanvasElement, platforms: Platform[]) => {
+    const key = `${layoutCacheKey}|${canvas.width}x${canvas.height}`;
+    if (terrainCanvas && terrainKey === key) return terrainLayer;
+
+    if (!terrainCanvas) terrainCanvas = document.createElement('canvas');
+
+    // 只缓存平台实际占用的那一横条：平台都是细长条，铺满整张画布的话每帧
+    // 要白白搬 1280x633 的位图，把省下来的光栅化又吃回去了。
+    // padding 要够放下平台顶部的辉光（shadowBlur 最大 14）和霓虹描边的外沿。
+    const PAD = 24;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of platforms) {
+        minX = Math.min(minX, p.x);
+        minY = Math.min(minY, p.y);
+        maxX = Math.max(maxX, p.x + p.width);
+        maxY = Math.max(maxY, p.y + p.height);
+    }
+    if (!platforms.length) { minX = minY = 0; maxX = maxY = 0; }
+
+    const bx = Math.max(0, Math.floor(minX - PAD));
+    const by = Math.max(0, Math.floor(minY - PAD));
+    const bw = Math.max(1, Math.min(canvas.width, Math.ceil(maxX + PAD)) - bx);
+    const bh = Math.max(1, Math.min(canvas.height, Math.ceil(maxY + PAD)) - by);
+
+    terrainCanvas.width = bw;
+    terrainCanvas.height = bh;
+    terrainLayer.canvas = terrainCanvas;
+    terrainLayer.x = bx;
+    terrainLayer.y = by;
+
+    const tctx = terrainCanvas.getContext('2d');
+    // 改 width/height 会把画布和绘图状态一起重置，所以这里的 translate 是在干净状态上做的
+    if (tctx) {
+        tctx.translate(-bx, -by);
+        paintPlatforms(tctx, m, platforms);
+    }
+    terrainKey = key;
+    return terrainLayer;
+};
+
+// 每局开局重新掷一次地形
+const regenerateLayout = (m: MapType) => {
+    baseLayout = generateLayout(m);
+    layoutVersion++;
+};
+
+// 在“手部”原点处绘制角色持有的武器图标
+const drawHeldWeapon = (ctx: CanvasRenderingContext2D, weapon: WeaponType) => {
+    if (weapon === 'sword') {
+        ctx.fillStyle = '#ccc';
+        ctx.fillRect(0, -25, 4, 30);
+        ctx.fillStyle = '#8B4513';
+        ctx.fillRect(-3, 0, 10, 2);
+    } else if (weapon === 'bomb' || weapon === 'atom_bomb') {
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.arc(5, 0, 8, 0, Math.PI*2);
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.beginPath();
+        ctx.moveTo(5, -8);
+        ctx.quadraticCurveTo(10, -15, 15, -10);
+        ctx.stroke();
+        if (weapon === 'atom_bomb') {
+            ctx.fillStyle = 'yellow';
+            ctx.font = '10px Arial';
+            ctx.fillText('☢', 2, 4);
+        }
+    } else if (weapon === 'missile') {
+        ctx.fillStyle = 'green';
+        ctx.fillRect(0, -5, 20, 10);
+        ctx.fillStyle = 'red';
+        ctx.fillRect(20, -5, 5, 10);
+    } else if (weapon === 'dragon') {
+        ctx.font = '20px serif';
+        ctx.fillText('🐉', 0, 5);
+    } else if (weapon === 'bomber') {
+        // 无线电/对讲机外观
+        ctx.fillStyle = '#333';
+        ctx.fillRect(0, -10, 10, 16);
+        ctx.fillStyle = '#000';
+        ctx.fillRect(2, -15, 2, 5); // 天线
+        ctx.fillStyle = '#f00';
+        ctx.beginPath(); ctx.arc(5, -5, 2, 0, Math.PI*2); ctx.fill(); // 信号灯
+    } else if (weapon === 'pokemon') {
+        // 精灵球
+        ctx.fillStyle = 'red'; ctx.beginPath(); ctx.arc(0,0,6, Math.PI, 0); ctx.fill();
+        ctx.fillStyle = 'white'; ctx.beginPath(); ctx.arc(0,0,6, 0, Math.PI); ctx.fill();
+        ctx.fillStyle = 'black'; ctx.fillRect(-6, -1, 12, 2);
+        ctx.fillStyle = 'white'; ctx.beginPath(); ctx.arc(0,0,2, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = 'black'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(0,0,2, 0, Math.PI*2); ctx.stroke();
+    } else if (weapon === 'laser') {
+        // 激光枪外观
+        ctx.fillStyle = '#444';
+        ctx.fillRect(0, -5, 15, 8);
+        ctx.fillStyle = '#f00';
+        ctx.fillRect(15, -4, 3, 6); // 枪口
+        ctx.fillStyle = '#666';
+        ctx.fillRect(2, 3, 4, 6); // 握把
+    } else if (weapon === 'zeperion') {
+        // 哉佩利敖光线发射器外观（类似手腕发光装置）
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, -4, 12, 6);
+        ctx.fillStyle = '#fbbf24'; // 金色
+        ctx.fillRect(12, -3, 4, 4);
+        // 枪口的光点：用两个同心圆伪造辉光，不用 shadowBlur（每个实体每帧一次，太贵）
+        ctx.fillStyle = 'rgba(251, 191, 36, 0.35)';
+        ctx.beginPath(); ctx.arc(14, -1, 6, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#fde68a';
+        ctx.beginPath(); ctx.arc(14, -1, 3, 0, Math.PI*2); ctx.fill();
+    } else if (weapon === 'c4') {
+        // C4 炸药块（手持）
+        ctx.fillStyle = '#6b5a3e';
+        ctx.fillRect(-8, -5, 16, 10);
+        ctx.fillStyle = '#3f3625';
+        ctx.fillRect(-8, -5, 16, 3);
+        ctx.fillStyle = '#ff0000';
+        ctx.beginPath(); ctx.arc(5, 5, 2, 0, Math.PI*2); ctx.fill();
+    } else if (weapon === 'piercer') {
+        // 穿地弹（重型炮弹）
+        ctx.fillStyle = '#4b5563';
+        ctx.fillRect(0, -4, 18, 8);
+        ctx.fillStyle = '#dc2626';
+        ctx.beginPath(); ctx.arc(18, 0, 4, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillRect(-4, -4, 4, 8); // 金色尾翼
+    } else if (weapon === 'aug') {
+        // AUG 突击步枪（手持）
+        ctx.fillStyle = '#2f3e46';
+        ctx.fillRect(0, -6, 26, 8);        // 枪身
+        ctx.fillStyle = '#1f2a30';
+        ctx.fillRect(2, -10, 8, 4);        // 提把瞄具
+        ctx.fillStyle = '#8a5a30';
+        ctx.fillRect(6, 2, 8, 6);          // 握把
+        ctx.fillStyle = '#444';
+        ctx.fillRect(24, -4, 5, 4);        // 枪口
+    } else if (weapon === 'gas') {
+        // 毒气弹（手持罐）
+        ctx.fillStyle = '#3f7d2f';
+        ctx.fillRect(-4, -6, 12, 12);
+        ctx.fillStyle = '#2f5d22';
+        ctx.fillRect(-4, -6, 12, 3);
+        ctx.fillStyle = '#c9ff6b';
+        ctx.font = '10px sans-serif';
+        ctx.fillText('☠', -3, 4);
+    }
+};
+
+// 圆角矩形路径（手写，避免依赖较新的 ctx.roundRect）
+const roundRectPath = (
+    ctx: CanvasRenderingContext2D,
+    x: number, y: number, w: number, h: number, r: number
+) => {
+    const rr = Math.max(0, Math.min(r, w / 2, h / 2));
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.lineTo(x + w - rr, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+    ctx.lineTo(x + w, y + h - rr);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+    ctx.lineTo(x + rr, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+    ctx.lineTo(x, y + rr);
+    ctx.quadraticCurveTo(x, y, x + rr, y);
+    ctx.closePath();
+};
+
+// 障碍配色：按地图取，保证和该地图的平台材质是同一套色系
+const OBSTACLE_PALETTE: Record<MapType, {
+    hazard: string; hazardDark: string;
+    block: string; blockTop: string; blockEdge: string;
+    mover: string; moverEdge: string;
+}> = {
+    neon:    { hazard: '#f43f5e', hazardDark: '#881337', block: '#475569', blockTop: '#64748b', blockEdge: '#22d3ee', mover: '#334155', moverEdge: '#67e8f9' },
+    forest:  { hazard: '#ef4444', hazardDark: '#7f1d1d', block: '#8a5a30', blockTop: '#a97142', blockEdge: '#4c9a3a', mover: '#8a5a30', moverEdge: '#c9e265' },
+    desert:  { hazard: '#dc2626', hazardDark: '#7f1d1d', block: '#c08a4a', blockTop: '#d8a763', blockEdge: '#8a5f2b', mover: '#c08a4a', moverEdge: '#ffe9b8' },
+    ocean:   { hazard: '#e11d48', hazardDark: '#881337', block: '#44636f', blockTop: '#7ba6b5', blockEdge: '#e07a9a', mover: '#44636f', moverEdge: '#7dd3fc' },
+    volcano: { hazard: '#ff5722', hazardDark: '#7c2d12', block: '#4a3333', blockTop: '#6b4a4a', blockEdge: '#ff8c3a', mover: '#4a3333', moverEdge: '#ff8c3a' },
+};
+
+// 绘制障碍：伤害陷阱（尖刺）/ 实心阻挡（箱子）/ 移动平台（带轨迹虚线）
+/*
+  平台材质绘制。整块是纯静态的：位置来自缓存好的 platformCache（只在换图 / 改窗口尺寸 /
+  换局时失效），每帧重画的结果完全一样。所以只在布局变化时画一次到离屏画布，
+  之后每帧一次 drawImage —— 省掉每帧 N 个线性渐变 + N 次 shadowBlur（最贵的两项）。
+*/
+const paintPlatforms = (
+    ctx: CanvasRenderingContext2D,
+    map: MapType,
+    platforms: Platform[],
+) => {
+    if (map === 'forest') {
+        platforms.forEach(p => {
+            const bark = ctx.createLinearGradient(0, p.y, 0, p.y + p.height);
+            bark.addColorStop(0, '#8a5a30');
+            bark.addColorStop(1, '#5a3a1c');
+            ctx.fillStyle = bark;
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 10);
+            ctx.fill();
+            // 苔藓 / 草皮顶面
+            ctx.fillStyle = '#4c9a3a';
+            roundRectPath(ctx, p.x, p.y - 4, p.width, 10, 5);
+            ctx.fill();
+            ctx.fillStyle = '#3f7d2f';
+            ctx.beginPath(); ctx.arc(p.x + p.width * 0.3, p.y + p.height / 2, 3, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(p.x + p.width * 0.7, p.y + p.height / 2, 3, 0, Math.PI * 2); ctx.fill();
+        });
+    } else if (map === 'desert') {
+        platforms.forEach(p => {
+            const sand = ctx.createLinearGradient(0, p.y, 0, p.y + p.height);
+            sand.addColorStop(0, '#e0bc7c');
+            sand.addColorStop(1, '#b98f4b');
+            ctx.fillStyle = sand;
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 8);
+            ctx.fill();
+            ctx.fillStyle = 'rgba(255, 240, 200, 0.7)';
+            roundRectPath(ctx, p.x + 4, p.y + 2, p.width - 8, 4, 2);
+            ctx.fill();
+        });
+    } else if (map === 'ocean') {
+        platforms.forEach(p => {
+            const rock = ctx.createLinearGradient(0, p.y, 0, p.y + p.height);
+            rock.addColorStop(0, '#7ba6b5');
+            rock.addColorStop(1, '#44636f');
+            ctx.fillStyle = rock;
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 10);
+            ctx.fill();
+            // 珊瑚点缀
+            ctx.fillStyle = '#e07a9a';
+            ctx.beginPath(); ctx.arc(p.x + p.width * 0.2, p.y - 2, 6, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(p.x + p.width * 0.8, p.y - 1, 5, 0, Math.PI * 2); ctx.fill();
+        });
+    } else if (map === 'volcano') {
+        platforms.forEach(p => {
+            const basalt = ctx.createLinearGradient(0, p.y, 0, p.y + p.height);
+            basalt.addColorStop(0, '#4a3333');
+            basalt.addColorStop(1, '#221717');
+            ctx.fillStyle = basalt;
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 8);
+            ctx.fill();
+            // 顶部岩浆边（带辉光）
+            const lava = ctx.createLinearGradient(p.x, p.y, p.x + p.width, p.y);
+            lava.addColorStop(0, '#ff8c3a');
+            lava.addColorStop(0.5, '#ff5722');
+            lava.addColorStop(1, '#ff8c3a');
+            ctx.save();
+            ctx.shadowBlur = 14;
+            ctx.shadowColor = '#ff5722';
+            ctx.fillStyle = lava;
+            roundRectPath(ctx, p.x + 3, p.y - 3, p.width - 6, 5, 2.5);
+            ctx.fill();
+            ctx.restore();
+        });
+    } else {
+        // 霓虹都市：金属平台 + 青色霓虹边
+        platforms.forEach(p => {
+            const body = ctx.createLinearGradient(0, p.y, 0, p.y + p.height);
+            body.addColorStop(0, '#475569');
+            body.addColorStop(0.5, '#334155');
+            body.addColorStop(1, '#1e293b');
+            ctx.fillStyle = body;
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 6);
+            ctx.fill();
+
+            ctx.save();
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = '#22d3ee';
+            ctx.strokeStyle = '#67e8f9';
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(p.x + 7, p.y + 1.5);
+            ctx.lineTo(p.x + p.width - 7, p.y + 1.5);
+            ctx.stroke();
+            ctx.restore();
+
+            // 底部暗边，增强厚度感
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.55)';
+            roundRectPath(ctx, p.x + 4, p.y + p.height - 5, p.width - 8, 4, 2);
+            ctx.fill();
+        });
+    }
+};
+
+const drawObstacles = (
+    ctx: CanvasRenderingContext2D,
+    map: MapType,
+    layout: Layout,
+) => {
+    const pal = OBSTACLE_PALETTE[map];
+
+    // 伤害陷阱：一排尖刺，底座压深色，尖刺朝上
+    layout.spikes.forEach(sp => {
+        const teeth = Math.max(2, Math.round(sp.width / 18));
+        const tw = sp.width / teeth;
+
+        ctx.fillStyle = pal.hazardDark;
+        roundRectPath(ctx, sp.x, sp.y + sp.height - 6, sp.width, 6, 3);
+        ctx.fill();
+
+        ctx.fillStyle = pal.hazard;
+        ctx.beginPath();
+        for (let i = 0; i < teeth; i++) {
+            const x0 = sp.x + i * tw;
+            ctx.moveTo(x0, sp.y + sp.height);
+            ctx.lineTo(x0 + tw / 2, sp.y);
+            ctx.lineTo(x0 + tw, sp.y + sp.height);
+        }
+        ctx.closePath();
+        ctx.fill();
+
+        // 尖刺右侧高光，让三角有立体感
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (let i = 0; i < teeth; i++) {
+            const x0 = sp.x + i * tw;
+            ctx.moveTo(x0 + tw / 2, sp.y + 2);
+            ctx.lineTo(x0 + tw * 0.8, sp.y + sp.height);
+        }
+        ctx.stroke();
+    });
+
+    // 实心阻挡：箱子，顶面亮、边框亮色，中间交叉加固条
+    layout.blocks.forEach(b => {
+        ctx.fillStyle = pal.block;
+        roundRectPath(ctx, b.x, b.y, b.width, b.height, 8);
+        ctx.fill();
+
+        ctx.fillStyle = pal.blockTop;
+        roundRectPath(ctx, b.x + 3, b.y + 3, b.width - 6, 8, 4);
+        ctx.fill();
+
+        ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(b.x + 7, b.y + 16); ctx.lineTo(b.x + b.width - 7, b.y + b.height - 7);
+        ctx.moveTo(b.x + b.width - 7, b.y + 16); ctx.lineTo(b.x + 7, b.y + b.height - 7);
+        ctx.stroke();
+
+        ctx.strokeStyle = pal.blockEdge;
+        ctx.lineWidth = 3;
+        roundRectPath(ctx, b.x + 1.5, b.y + 1.5, b.width - 3, b.height - 3, 7);
+        ctx.stroke();
+    });
+
+    // 移动平台：先画往返轨迹虚线（提示会移动），再画平台本体
+    layout.movers.forEach(mv => {
+        const range = mv.range ?? 0;
+        // 轨迹虚线必须锚在往返中点（baseX / baseY）上，不能跟着平台当前位置走：
+        // 用 mv.x / mv.y 的话整条线会随平台一起平移，背景里就像有条白线在乱飞。
+        const cx = mv.baseX ?? mv.x;
+        const cy = mv.baseY ?? mv.y;
+
+        ctx.save();
+        ctx.setLineDash([8, 8]);
+        ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        if (mv.axis === 'y') {
+            // 竖线画满整条运动包络，小朋友一眼能看出平台会上下跑多远
+            ctx.moveTo(cx + mv.width / 2, cy - range);
+            ctx.lineTo(cx + mv.width / 2, cy + mv.height + range);
+        } else {
+            ctx.moveTo(cx - range, cy + mv.height / 2);
+            ctx.lineTo(cx + mv.width + range, cy + mv.height / 2);
+        }
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.fillStyle = pal.mover;
+        roundRectPath(ctx, mv.x, mv.y, mv.width, mv.height, 8);
+        ctx.fill();
+
+        // 平台会移动，没法跟着静态层一起缓存，所以这条霓虹边也别用 shadowBlur：
+        // 用一条更粗的半透明底线冒充辉光，省掉每帧每个移动平台一次高斯模糊。
+        const edgeLine = (color: string, width: number) => {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
+            ctx.beginPath();
+            ctx.moveTo(mv.x + 7, mv.y + 2);
+            ctx.lineTo(mv.x + mv.width - 7, mv.y + 2);
+            ctx.stroke();
+        };
+        ctx.save();
+        ctx.globalAlpha = 0.35;
+        edgeLine(pal.moverEdge, 8);
+        ctx.globalAlpha = 1;
+        edgeLine(pal.moverEdge, 3);
+        ctx.restore();
+    });
+};
+
+const drawEntity = (ctx: CanvasRenderingContext2D, entity: Entity, frame: number) => {
     ctx.save();
     
     const centerX = entity.pos.x;
@@ -41,7 +1178,9 @@ const drawEntity = (ctx: CanvasRenderingContext2D, entity: Entity) => {
     ctx.translate(centerX, centerY);
     
     if (entity.isDead) {
-         ctx.rotate(Math.PI / 2 * (entity.facingRight ? 1 : -1));
+         // 败者被击飞时持续翻滚，而非静态横躺
+         const tumble = frame * 0.12 * (entity.facingRight ? 1 : -1);
+         ctx.rotate(Math.PI / 2 * (entity.facingRight ? 1 : -1) + tumble);
          ctx.translate(0, -10);
     }
 
@@ -77,7 +1216,7 @@ const drawEntity = (ctx: CanvasRenderingContext2D, entity: Entity) => {
         ctx.moveTo(0, -25 + crouchOffset);
         ctx.lineTo(15, -5);
     } else if (Math.abs(entity.vel.x) > 0.1 && entity.isGrounded) {
-        const walkCycle = Math.sin(Date.now() / 100) * 10;
+        const walkCycle = Math.sin(frame / 6) * 10;
         ctx.lineTo(-10 + walkCycle, 0);
         ctx.moveTo(0, -25 + crouchOffset);
         ctx.lineTo(10 - walkCycle, 0);
@@ -94,9 +1233,11 @@ const drawEntity = (ctx: CanvasRenderingContext2D, entity: Entity) => {
     ctx.moveTo(0, shoulderY);
 
     if (entity.isWinner) {
-        ctx.lineTo(-20, shoulderY - 30);
+        const wave = Math.sin(frame / 5) * 6;               // 双臂左右摇摆
+        const pump = Math.max(0, Math.sin(frame / 6)) * 12; // 双臂上下挥动
+        ctx.lineTo(-20 + wave, shoulderY - 30 - pump);
         ctx.moveTo(0, shoulderY);
-        ctx.lineTo(20, shoulderY - 30);
+        ctx.lineTo(20 + wave, shoulderY - 30 - pump);
     } else if (entity.isAttacking) {
         const attackProgress = entity.attackFrame / 15;
         ctx.lineTo(25, shoulderY - 10 + attackProgress * 20);
@@ -105,74 +1246,12 @@ const drawEntity = (ctx: CanvasRenderingContext2D, entity: Entity) => {
         
         ctx.save();
         ctx.translate(15, shoulderY + 5);
-        
-        if (entity.heldWeapon === 'sword') {
-            ctx.fillStyle = '#ccc';
-            ctx.fillRect(0, -25, 4, 30);
-            ctx.fillStyle = '#8B4513';
-            ctx.fillRect(-3, 0, 10, 2);
-        } else if (entity.heldWeapon === 'bomb' || entity.heldWeapon === 'atom_bomb') {
-            ctx.fillStyle = '#000';
-            ctx.beginPath();
-            ctx.arc(5, 0, 8, 0, Math.PI*2);
-            ctx.fill();
-            ctx.strokeStyle = '#fff';
-            ctx.beginPath();
-            ctx.moveTo(5, -8);
-            ctx.quadraticCurveTo(10, -15, 15, -10);
-            ctx.stroke();
-             if (entity.heldWeapon === 'atom_bomb') {
-                ctx.fillStyle = 'yellow';
-                ctx.font = '10px Arial';
-                ctx.fillText('☢', 2, 4);
-            }
-        } else if (entity.heldWeapon === 'missile') {
-             ctx.fillStyle = 'green';
-             ctx.fillRect(0, -5, 20, 10);
-             ctx.fillStyle = 'red';
-             ctx.fillRect(20, -5, 5, 10);
-        } else if (entity.heldWeapon === 'dragon') {
-             ctx.font = '20px serif';
-             ctx.fillText('🐉', 0, 5);
-        } else if (entity.heldWeapon === 'bomber') {
-             // 无线电/对讲机外观
-             ctx.fillStyle = '#333';
-             ctx.fillRect(0, -10, 10, 16);
-             ctx.fillStyle = '#000';
-             ctx.fillRect(2, -15, 2, 5); // 天线
-             ctx.fillStyle = '#f00';
-             ctx.beginPath(); ctx.arc(5, -5, 2, 0, Math.PI*2); ctx.fill(); // 信号灯
-        } else if (entity.heldWeapon === 'pokemon') {
-            // 精灵球
-            ctx.fillStyle = 'red'; ctx.beginPath(); ctx.arc(0,0,6, Math.PI, 0); ctx.fill();
-            ctx.fillStyle = 'white'; ctx.beginPath(); ctx.arc(0,0,6, 0, Math.PI); ctx.fill();
-            ctx.fillStyle = 'black'; ctx.fillRect(-6, -1, 12, 2);
-            ctx.fillStyle = 'white'; ctx.beginPath(); ctx.arc(0,0,2, 0, Math.PI*2); ctx.fill();
-            ctx.strokeStyle = 'black'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(0,0,2, 0, Math.PI*2); ctx.stroke();
-        } else if (entity.heldWeapon === 'laser') {
-            // 激光枪外观
-            ctx.fillStyle = '#444';
-            ctx.fillRect(0, -5, 15, 8);
-            ctx.fillStyle = '#f00';
-            ctx.fillRect(15, -4, 3, 6); // 枪口
-            ctx.fillStyle = '#666';
-            ctx.fillRect(2, 3, 4, 6); // 握把
-        } else if (entity.heldWeapon === 'zeperion') {
-            // 哉佩利敖光线发射器外观（类似手腕发光装置）
-            ctx.fillStyle = '#fff';
-            ctx.fillRect(0, -4, 12, 6);
-            ctx.fillStyle = '#fbbf24'; // 金色
-            ctx.fillRect(12, -3, 4, 4);
-            ctx.shadowBlur = 10;
-            ctx.shadowColor = '#fbbf24';
-            ctx.beginPath(); ctx.arc(14, -1, 3, 0, Math.PI*2); ctx.fill();
-            ctx.shadowBlur = 0;
-        }
+        drawHeldWeapon(ctx, entity.heldWeapon);
         ctx.restore();
 
     } else {
         if (Math.abs(entity.vel.x) > 0.1) {
-             const armCycle = Math.cos(Date.now() / 100) * 10;
+             const armCycle = Math.cos(frame / 6) * 10;
              ctx.lineTo(armCycle, shoulderY + 15);
         } else {
              ctx.lineTo(0, shoulderY + 20);
@@ -183,7 +1262,7 @@ const drawEntity = (ctx: CanvasRenderingContext2D, entity: Entity) => {
     ctx.restore();
 };
 
-const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setStats, setPlayers, gameMode }) => {
+const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setStats, setPlayers, gameMode, map }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number>();
   const frameRef = useRef<number>(0);
@@ -202,7 +1281,19 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
   const keysRef = useRef<Set<string>>(new Set());
   const statsRef = useRef<GameStats>({ winner: null, mode: gameMode, duration: 0 });
   const shakeRef = useRef<number>(0);
-  const flashRef = useRef<number>(0); 
+  const flashRef = useRef<number>(0);
+  const winTimeoutRef = useRef<number | null>(null);
+  const victoryFrameRef = useRef<number>(0); // 胜利动画时间轴（帧）
+  // 本帧有人出局，等伤害结算完再裁决胜负（见 update 里的 resolveOutcome）
+  const pendingOutcomeRef = useRef<boolean>(false);
+
+  // 固定步长主循环的时间累积器
+  const lastTimeRef = useRef<number>(0);
+  const accRef = useRef<number>(0);
+  const hudSigRef = useRef<string>(''); // 上一次同步到 HUD 的签名
+
+  // 查找与指定角色敌对且存活的目标
+  const findEnemy = (ownerId: string) => entitiesRef.current.find(e => e.id !== ownerId && !e.isDead); 
 
   // 初始化对决
   const initGame = useCallback(() => {
@@ -215,7 +1306,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
       width: 52, height: 91, color: '#3b82f6', 
       isGrounded: false, isCrouching: false, health: 100, maxHealth: 100, isDead: false,
       facingRight: true, attackCooldown: 0, isAttacking: false, attackFrame: 0,
-      heldWeapon: null, ammo: 0, weaponDuration: 0, stunFrames: 0
+      heldWeapon: null, ammo: 0, weaponDuration: 0, stunFrames: 0, spikeCooldown: 0
     });
 
     // P2/CPU (右侧)
@@ -225,8 +1316,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
       width: 52, height: 91, color: '#facc15',
       isGrounded: false, isCrouching: false, health: 100, maxHealth: 100, isDead: false,
       facingRight: false, attackCooldown: 0, isAttacking: false, attackFrame: 0,
-      heldWeapon: null, ammo: 0, weaponDuration: 0, stunFrames: 0
+      heldWeapon: null, ammo: 0, weaponDuration: 0, stunFrames: 0, spikeCooldown: 0
     });
+
+    // 每局重新随机一次地形（固定平台保留，随机追加平台与障碍）
+    regenerateLayout(map);
 
     entitiesRef.current = newEntities;
     particlesRef.current = [];
@@ -248,29 +1342,48 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
     frameRef.current = 0;
     shakeRef.current = 0;
     flashRef.current = 0;
+    victoryFrameRef.current = 0;
+    pendingOutcomeRef.current = false; // 上一局没结算完的胜负不该带进新一局
     
     setStats(statsRef.current);
     setPlayers([...entitiesRef.current]);
-  }, [gameMode, setStats, setPlayers]);
+  }, [gameMode, map, setStats, setPlayers]);
 
   useEffect(() => {
+    // 游戏用到的按键：阻止默认行为（空格/方向键滚动页面、回车触发聚焦按钮）
+    const GAME_KEYS = new Set([
+        'Space', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+        'KeyW', 'KeyA', 'KeyS', 'KeyD',
+    ]);
+
     const handleKeyDown = (e: KeyboardEvent) => {
+        if (GAME_KEYS.has(e.code)) e.preventDefault();
         if (e.repeat) return;
         keysRef.current.add(e.code);
-        if (e.code === 'KeyR' && gameState === GameState.GAME_OVER) {
-             setGameState(GameState.PLAYING);
-        }
     };
-    const handleKeyUp = (e: KeyboardEvent) => keysRef.current.delete(e.code);
+    const handleKeyUp = (e: KeyboardEvent) => {
+        if (GAME_KEYS.has(e.code)) e.preventDefault();
+        keysRef.current.delete(e.code);
+    };
+    // 切到别的窗口 / 标签页时清空按键，避免回来时角色一直往一个方向跑
+    const clearKeys = () => keysRef.current.clear();
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', clearKeys);
+    document.addEventListener('visibilitychange', clearKeys);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', clearKeys);
+      document.removeEventListener('visibilitychange', clearKeys);
     };
-  }, [gameState, setGameState]);
+  }, []);
 
   useEffect(() => {
+    // 换局/回菜单时清空按键：上一局按住不放的方向键、攻击键不该被带进新的一局，
+    // 否则新角色一出生就自己往一个方向跑、自己挥拳。
+    keysRef.current.clear();
     if (gameState === GameState.PLAYING) {
       initGame();
     }
@@ -279,7 +1392,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
   const spawnParticles = (x: number, y: number, color: string, count: number, speed = 8, lifeMultiplier = 1, baseSize = 3) => {
       for(let i=0; i<count; i++) {
           particlesRef.current.push({
-              id: Math.random().toString(),
               pos: {x, y},
               vel: { x: (Math.random() - 0.5) * speed, y: (Math.random() - 0.5) * speed },
               life: (20 + Math.random() * 20) * lifeMultiplier,
@@ -295,7 +1407,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
     // 1. 蘑菇柄 (上升的烟柱)
     for (let i = 0; i < 20; i++) {
       particlesRef.current.push({
-        id: Math.random().toString(),
         pos: { x: x + (Math.random()-0.5)*20, y: y },
         vel: { x: (Math.random()-0.5) * 1, y: -2 - Math.random() * 3 },
         life: 180,
@@ -314,7 +1425,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
       const angle = (Math.PI / 40) * i * 2; // 360度
       const speed = 2 + Math.random() * 3;
       particlesRef.current.push({
-        id: Math.random().toString(),
         pos: { x: x, y: y - 80 },
         vel: { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed * 0.5 - 1 },
         life: 200,
@@ -332,7 +1442,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
     for (let i = 0; i < 30; i++) {
         const dir = i % 2 === 0 ? 1 : -1;
         particlesRef.current.push({
-            id: Math.random().toString(),
             pos: { x: x, y: y },
             vel: { x: dir * (5 + Math.random()*10), y: -1 },
             life: 100, maxLife: 100,
@@ -346,13 +1455,89 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
     }
   };
 
+  // 光波冲击波：向外扩散的描边圆环
+  const spawnShockwave = (x: number, y: number, color = '#ffe28a', scale = 1) => {
+    const rings = [
+        { size: 4, growth: 13, life: 24, lw: 8,  a: 0.9,  d: 0.04, c: '#ffffff' },
+        { size: 2, growth: 8,  life: 30, lw: 5,  a: 0.8,  d: 0.03, c: color },
+        { size: 0, growth: 4,  life: 38, lw: 3,  a: 0.6,  d: 0.02, c: color },
+    ];
+    rings.forEach((r, idx) => {
+        particlesRef.current.push({
+            id: 'sw' + Math.random().toString(36).slice(2) + idx,
+            pos: { x, y },
+            vel: { x: 0, y: 0 },
+            life: r.life, maxLife: r.life,
+            color: r.c,
+            size: r.size * scale,
+            gravity: 0,
+            growth: r.growth * scale,
+            alphaDecay: r.d,
+            currentAlpha: r.a,
+            kind: 'ring',
+            lineWidth: r.lw,
+            lineWidthDecay: 0.3
+        });
+    });
+  };
+
+  // 爆炸云团：火心 + 翻滚烟柱 + 贴地尘土
+  const spawnExplosionCloud = (x: number, y: number, scale = 1) => {
+    // 1. 火心 (橙红燃烧)
+    for (let i = 0; i < 30; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 2 + Math.random() * 4;
+        particlesRef.current.push({
+            pos: { x, y },
+            vel: { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed - 1 },
+            life: 50, maxLife: 50,
+            color: Math.random() > 0.5 ? '#ff5500' : '#ff8800',
+            size: (10 + Math.random() * 8) * scale,
+            gravity: -0.03,
+            growth: 0.6,
+            alphaDecay: 0.03,
+            currentAlpha: 0.9
+        });
+    }
+    // 2. 灰色烟团 (翻滚上升)
+    for (let i = 0; i < 25; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 1 + Math.random() * 3;
+        particlesRef.current.push({
+            pos: { x: x + (Math.random() - 0.5) * 30, y: y - 10 },
+            vel: { x: Math.cos(angle) * speed, y: -1 - Math.random() * 2.5 },
+            life: 120, maxLife: 120,
+            color: Math.random() > 0.5 ? '#555' : '#444',
+            size: (14 + Math.random() * 12) * scale,
+            gravity: -0.04,
+            growth: 0.5,
+            alphaDecay: 0.008,
+            currentAlpha: 0.75
+        });
+    }
+    // 3. 底部尘土冲击 (贴地扩散)
+    for (let i = 0; i < 20; i++) {
+        const dir = i % 2 === 0 ? 1 : -1;
+        particlesRef.current.push({
+            pos: { x, y },
+            vel: { x: dir * (6 + Math.random() * 8), y: -1 - Math.random() },
+            life: 70, maxLife: 70,
+            color: '#8a7a5a',
+            size: 10 + Math.random() * 6,
+            gravity: 0.2,
+            growth: 0.3,
+            alphaDecay: 0.015,
+            currentAlpha: 0.6
+        });
+    }
+  };
+
   const spawnConfetti = (width: number) => {
       const colors = ['#FFD700', '#FF6347', '#00BFFF', '#32CD32', '#FF69B4', '#FFFFFF'];
       const x = Math.random() * width;
       const y = -10; 
       const color = colors[Math.floor(Math.random() * colors.length)];
       particlesRef.current.push({
-          id: Math.random().toString(),
           pos: { x, y },
           vel: { x: (Math.random() - 0.5) * 2, y: Math.random() * 2 + 1 },
           life: 200, maxLife: 200, color, size: Math.random() * 4 + 3, gravity: 0.02 
@@ -372,7 +1557,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           type = 'dragon';
       } else {
           // 移除 pistol, 加入 pokemon, bomber, laser, zeperion
-          const normalPool: WeaponType[] = ['bomb', 'sword', 'bomber', 'pokemon', 'laser', 'zeperion'];
+          const normalPool: WeaponType[] = ['bomb', 'sword', 'bomber', 'pokemon', 'laser', 'zeperion', 'c4', 'piercer', 'aug', 'gas'];
           type = normalPool[Math.floor(Math.random() * normalPool.length)];
       }
       
@@ -388,22 +1573,85 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
   };
 
   const update = () => {
-    if (gameState !== GameState.PLAYING && gameState !== GameState.VICTORY_ANIMATION) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    // 时间轴与衰减始终推进：菜单界面的背景动画（星空闪烁 / 流星 / 落叶）也要动
     frameRef.current++;
     if (shakeRef.current > 0) shakeRef.current--;
-    if (flashRef.current > 0) flashRef.current -= 0.02; 
-    if (gameState === GameState.PLAYING) statsRef.current.duration += 1/60;
+    if (flashRef.current > 0) flashRef.current -= 0.02;
 
-    const triggerWin = (winnerId: string) => {
+    if (gameState !== GameState.PLAYING && gameState !== GameState.VICTORY_ANIMATION) return;
+
+    const platforms = getPlatforms(map, canvas.width);
+
+    // 分出胜负后就不再累计时长：平局走的是 triggerDraw，它不切 gameState，
+    // 不拦一下的话这 2.2 秒结算窗口会被算进本局时长，和胜利路径口径不一致。
+    if (gameState === GameState.PLAYING && !statsRef.current.winner) statsRef.current.duration += 1/60;
+    if (gameState === GameState.VICTORY_ANIMATION) victoryFrameRef.current++;
+
+    // 按"谁还站着"裁决本局胜负。两个都倒下 = 同归于尽 = 平局。
+    const resolveOutcome = () => {
         if (statsRef.current.winner) return;
-        const winner = entitiesRef.current.find(e => e.id === winnerId);
-        if (winner) winner.isWinner = true;
-        statsRef.current.winner = winnerId === 'p1' ? 'P1' : 'P2';
+
+        const alive = entitiesRef.current.filter(e => !e.isDead);
+        if (alive.length !== 1) {
+            statsRef.current.winner = 'DRAW';
+            winTimeoutRef.current = window.setTimeout(() => setGameState(GameState.GAME_OVER), 2200);
+            return;
+        }
+
+        const winner = alive[0];
+        winner.isWinner = true;
+        statsRef.current.winner = winner.id === 'p1' ? 'P1' : 'P2';
+        victoryFrameRef.current = 0;
         setGameState(GameState.VICTORY_ANIMATION);
-        setTimeout(() => setGameState(GameState.GAME_OVER), 4000);
+        winTimeoutRef.current = window.setTimeout(() => setGameState(GameState.GAME_OVER), 4000);
+    };
+
+    // 有人出局 / 宣布平局 —— 这里只记账，真正的裁决交给下面的 resolveOutcome。
+    // 不能就地判定：同一帧里可能先有人被打死、紧接着另一个也被同归于尽带走，
+    // 就地判会让先死的那个"抢先"当上胜者，甚至出现尸体上台领奖。
+    // 所以 winnerId 参数已经用不上了 —— 谁赢只看下一帧谁还站着。
+    const triggerWin = (_winnerId: string) => { pendingOutcomeRef.current = true; };
+    const triggerDraw = () => { pendingOutcomeRef.current = true; };
+
+    // 上一帧报的"有人出局"，现在所有伤害都已结算完，可以裁决了
+    if (pendingOutcomeRef.current) {
+        pendingOutcomeRef.current = false;
+        resolveOutcome();
+    }
+
+    const detonateC4 = (c4: Projectile) => {
+        if (!c4.active) return;
+        c4.active = false;
+        shakeRef.current = 60;
+        flashRef.current = 0.5;
+        playExplodeSound();
+        // 爆炸火球与浓烟
+        spawnParticles(c4.pos.x, c4.pos.y, '#ff8c00', 40, 15, 2);
+        spawnParticles(c4.pos.x, c4.pos.y - 10, '#555', 20, 8, 2);
+        spawnShockwave(c4.pos.x, c4.pos.y);
+        spawnExplosionCloud(c4.pos.x, c4.pos.y - 10, 0.9);
+        // 范围伤害（不伤及埋设者本人），半径约 220
+        entitiesRef.current.forEach(target => {
+            if (target.id === c4.ownerId || target.isDead) return;
+            const dx = target.pos.x - c4.pos.x;
+            const dy = target.pos.y - c4.pos.y;
+            if (dx * dx + dy * dy < 220 * 220) {
+                target.health -= 40;
+                target.stunFrames = 35;
+                const angle = Math.atan2(dy, dx);
+                target.vel.x = Math.cos(angle) * 35;
+                target.vel.y = Math.sin(angle) * 35 - 5;
+                if (target.health <= 0) {
+                    target.health = 0;
+                    target.isDead = true;
+                    target.isLoser = true;
+                    triggerWin(c4.ownerId);
+                }
+            }
+        });
     };
 
     // === 0. 掉落物生成 ===
@@ -431,7 +1679,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
         }
 
         if (item.vel.y > 0) {
-            PLATFORMS.forEach(plat => {
+            platforms.forEach(plat => {
                 if (item.pos.x + item.width > plat.x && item.pos.x < plat.x + plat.width) {
                     if (prevY + item.height <= plat.y && item.pos.y + item.height >= plat.y) {
                         item.pos.y = plat.y - item.height;
@@ -447,7 +1695,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
     // === 2. 投射物逻辑 (炸弹、导弹、神龙、轰炸机、宝可梦、哉佩利敖光线) ===
     projectilesRef.current.forEach(proj => {
         if (!proj.active) return;
-        
+
+        // 胜利动画期间冻结投射物：避免庆祝中的胜者被场上残余的爆炸 / 毒气二次打死
+        if (gameState === GameState.VICTORY_ANIMATION) return;
+
         // --- 哉佩利敖光线爆炸逻辑 ---
         if (proj.type === 'zeperion') {
             if (proj.zeperionLife === undefined) proj.zeperionLife = 0;
@@ -465,7 +1716,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                         const angle = Math.random() * Math.PI * 2;
                         const speed = 5 + Math.random() * 15;
                         particlesRef.current.push({
-                            id: Math.random().toString(),
                             pos: { x: proj.pos.x, y: proj.pos.y },
                             vel: { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed },
                             life: 40 + Math.random() * 20,
@@ -486,14 +1736,14 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
 
         // --- 宝可梦逻辑 (Pikachu) ---
         if (proj.type === 'pokemon') {
-            const target = entitiesRef.current.find(e => e.id !== proj.ownerId && !e.isDead);
+            const target = findEnemy(proj.ownerId);
             
             if (proj.pokemonState === 'seeking') {
                 if (target) {
                     const dx = target.pos.x - proj.pos.x;
                     const dy = (target.pos.y - 40) - proj.pos.y;
-                    const dist = Math.sqrt(dx*dx + dy*dy);
-                    
+                    const dist = Math.max(Math.sqrt(dx*dx + dy*dy), 1);
+
                     // 飞向敌人
                     proj.vel.x = (proj.vel.x * 20 + (dx / dist) * 12) / 21;
                     proj.vel.y = (proj.vel.y * 20 + (dy / dist) * 12) / 21;
@@ -549,7 +1799,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
 
         // --- 轰炸机逻辑 ---
         if (proj.type === 'bomber') {
-            const target = entitiesRef.current.find(e => e.id !== proj.ownerId && !e.isDead);
+            const target = findEnemy(proj.ownerId);
             const targetX = target ? target.pos.x : canvas.width / 2;
             const flyHeight = 150;
             
@@ -636,12 +1886,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                     shakeRef.current = 0;
                 }
             } else if (proj.dragonState === 'hunt') {
-                const target = entitiesRef.current.find(e => e.id !== proj.ownerId && !e.isDead);
+                const target = findEnemy(proj.ownerId);
                 if (target) {
                     const dx = target.pos.x - proj.pos.x;
                     const dy = (target.pos.y - 40) - proj.pos.y;
-                    const dist = Math.sqrt(dx*dx + dy*dy);
-                    
+                    const dist = Math.max(Math.sqrt(dx*dx + dy*dy), 1);
+
                     const speed = 7; // 略微提速
                     // 增加一点惯性，避免转弯太生硬
                     proj.vel.x = (proj.vel.x * 20 + (dx / dist) * speed) / 21;
@@ -709,6 +1959,214 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
             return; 
         }
 
+        // --- 穿地弹逻辑 ---
+        if (proj.type === 'piercer') {
+            if (proj.piercerState === 'flying') {
+                proj.vel.y += GRAVITY; // 弹体较重，下坠快
+                proj.pos.x += proj.vel.x;
+                proj.pos.y += proj.vel.y;
+                // 撞击地面：钻入地下
+                if (proj.pos.y >= GROUND_Y - 6) {
+                    proj.piercerState = 'burrowing';
+                    proj.pos.y = GROUND_Y + 26;
+                    proj.vel = { x: 0, y: 0 };
+                    shakeRef.current = 6;
+                    // 入地扬尘
+                    for (let i = 0; i < 16; i++) {
+                        particlesRef.current.push({
+                            pos: { x: proj.pos.x + (Math.random() - 0.5) * 20, y: GROUND_Y },
+                            vel: { x: (Math.random() - 0.5) * 6, y: -2 - Math.random() * 5 },
+                            life: 30, maxLife: 30, color: '#8a7a5a', size: 6, gravity: 0.3
+                        });
+                    }
+                }
+            } else if (proj.piercerState === 'burrowing') {
+                // 地下潜行，追踪敌人水平位置
+                const target = findEnemy(proj.ownerId);
+                const dir = target
+                    ? (target.pos.x > proj.pos.x ? 1 : -1)
+                    : (proj.piercerDir || 1);
+                proj.piercerDir = dir;
+                proj.pos.x += dir * 9;
+                proj.pos.y = GROUND_Y + 26; // 保持在地底
+                proj.piercerTimer = (proj.piercerTimer || 0) + 1;
+
+                // 地面隆起 + 沿途扬尘
+                if (frameRef.current % 2 === 0) {
+                    particlesRef.current.push({
+                        pos: { x: proj.pos.x, y: GROUND_Y - 2 },
+                        vel: { x: (Math.random() - 0.5) * 4, y: -2 - Math.random() * 4 },
+                        life: 26, maxLife: 26, color: '#7a6a4a', size: 5, gravity: 0.35
+                    });
+                }
+                shakeRef.current = Math.max(shakeRef.current, 2);
+
+                // 到达目标正下方后破土
+                const reached = target
+                    ? Math.abs(target.pos.x - proj.pos.x) < 32
+                    : (proj.piercerTimer || 0) > 110;
+                if (reached) {
+                    proj.piercerState = 'erupting';
+                    proj.vel = { x: dir * 3, y: -20 };
+                    proj.piercerTimer = 0;
+                }
+            } else if (proj.piercerState === 'erupting') {
+                proj.vel.y += GRAVITY;
+                proj.pos.x += proj.vel.x;
+                proj.pos.y += proj.vel.y;
+                proj.piercerTimer = (proj.piercerTimer || 0) + 1;
+
+                // 冲出地面后引爆
+                if (proj.pos.y <= GROUND_Y - 60 || (proj.piercerTimer || 0) > 30) {
+                    proj.active = false;
+                    shakeRef.current = 35;
+                    flashRef.current = Math.max(flashRef.current, 0.3);
+                    playExplodeSound();
+                    spawnParticles(proj.pos.x, GROUND_Y, '#8a7a5a', 30, 12, 1.5);
+                    spawnParticles(proj.pos.x, GROUND_Y - 20, '#ff8c00', 30, 14, 1.5);
+                    spawnShockwave(proj.pos.x, GROUND_Y - 10, '#ffb46b', 1.2);
+                    spawnExplosionCloud(proj.pos.x, GROUND_Y - 10, 0.7);
+
+                    // 范围伤害 + 强力上抛
+                    entitiesRef.current.forEach(target => {
+                        if (target.id === proj.ownerId || target.isDead) return;
+                        const dx = target.pos.x - proj.pos.x;
+                        const dy = target.pos.y - GROUND_Y;
+                        if (dx * dx + dy * dy < 200 * 200) {
+                            target.health -= 30;
+                            target.stunFrames = 40;
+                            target.vel.x = (dx >= 0 ? 1 : -1) * 22;
+                            target.vel.y = -26;
+                            if (target.health <= 0) {
+                                target.health = 0;
+                                target.isDead = true;
+                                target.isLoser = true;
+                                triggerWin(proj.ownerId);
+                            }
+                        }
+                    });
+                }
+            }
+            return;
+        }
+
+        // --- 毒气弹逻辑 ---
+        if (proj.type === 'gas') {
+            if (proj.gasState === 'flying') {
+                proj.vel.y += GRAVITY;
+                proj.pos.x += proj.vel.x;
+                proj.pos.y += proj.vel.y;
+
+                let landed = false;
+                if (proj.pos.y >= GROUND_Y - 6) {
+                    proj.pos.y = GROUND_Y - 6;
+                    landed = true;
+                } else if (proj.vel.y > 0) {
+                    platforms.forEach(plat => {
+                        if (proj.pos.x > plat.x && proj.pos.x < plat.x + plat.width &&
+                            proj.pos.y >= plat.y - 6 && proj.pos.y <= plat.y + 20) {
+                            proj.pos.y = plat.y - 6;
+                            landed = true;
+                        }
+                    });
+                }
+
+                if (landed) {
+                    proj.gasState = 'cloud';
+                    proj.gasTimer = 0;
+                    proj.vel = { x: 0, y: 0 };
+                    spawnParticles(proj.pos.x, proj.pos.y, '#7dd87d', 24, 6); // 释放毒气
+                }
+                return;
+            }
+
+            // cloud 状态：持续扩散并造成持续伤害
+            proj.gasTimer = (proj.gasTimer || 0) + 1;
+            if (proj.gasTimer < 20) {
+                proj.gasRadius = 10 + (proj.gasTimer / 20) * 110; // 0~20 帧长大到 120
+            } else {
+                proj.gasRadius = 120;
+            }
+
+            // 5 秒后消散
+            if (proj.gasTimer > 300) {
+                proj.active = false;
+                return;
+            }
+
+            // 末尾淡出的绿色粒子
+            if (proj.gasTimer > 260 && frameRef.current % 4 === 0) {
+                spawnParticles(
+                    proj.pos.x + (Math.random() - 0.5) * 120,
+                    proj.pos.y + (Math.random() - 0.5) * 60,
+                    '#9be29b', 1, 1, 0.5, 3
+                );
+            }
+
+            // 持续伤害：每 8 帧对范围内玩家造成 1 点伤害
+            if (proj.gasTimer % 8 === 0) {
+                const R = proj.gasRadius || 120;
+                entitiesRef.current.forEach(target => {
+                    if (target.isDead) return;
+                    const dx = target.pos.x - proj.pos.x;
+                    const dy = (target.pos.y - 30) - proj.pos.y;
+                    if (dx * dx + dy * dy < (R + 30) * (R + 30)) {
+                        target.health -= 1;
+                        spawnParticles(target.pos.x, target.pos.y - 30, '#a4e8a4', 2, 2, 0.5, 2);
+                        if (target.health <= 0) {
+                            target.health = 0;
+                            target.isDead = true;
+                            target.isLoser = true;
+                            if (target.id === proj.ownerId) {
+                                const other = entitiesRef.current.find(e => e.id !== proj.ownerId);
+                                if (other) triggerWin(other.id);
+                            } else {
+                                triggerWin(proj.ownerId);
+                            }
+                        }
+                    }
+                });
+            }
+            return;
+        }
+
+        // --- AUG 步枪弹道 ---
+        if (proj.type === 'aug') {
+            if (!proj.trail) proj.trail = [];
+            proj.trail.push({ ...proj.pos });
+            if (proj.trail.length > 12) proj.trail.shift();
+
+            proj.pos.x += proj.vel.x;
+            proj.pos.y += proj.vel.y;
+
+            // 出界自动失效
+            if (proj.pos.x < -50 || proj.pos.x > canvas.width + 50 || proj.pos.y < -50 || proj.pos.y > canvas.height + 50) {
+                proj.active = false;
+            }
+
+            // 命中检测（单发，不穿透）
+            entitiesRef.current.forEach(target => {
+                if (target.id === proj.ownerId || target.isDead || !proj.active) return;
+                if (Math.abs(proj.pos.x - target.pos.x) < 20 &&
+                    proj.pos.y > target.pos.y - 75 && proj.pos.y < target.pos.y + 10) {
+                    proj.active = false;
+                    target.health -= 6;
+                    target.stunFrames = 8;
+                    target.vel.x += proj.vel.x > 0 ? 4 : -4;
+                    playHitSound();
+                    spawnParticles(proj.pos.x, proj.pos.y, '#ffe28a', 6, 6);
+                    shakeRef.current = 2;
+                    if (target.health <= 0) {
+                        target.health = 0;
+                        target.isDead = true;
+                        target.isLoser = true;
+                        triggerWin(proj.ownerId);
+                    }
+                }
+            });
+            return;
+        }
+
         // --- 巡航导弹逻辑 (东风) ---
         if (proj.type === 'missile') {
             if (!proj.trail) proj.trail = [];
@@ -718,21 +2176,19 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
             if (frameRef.current % 2 === 0) {
                 // 浓烟尾迹
                 particlesRef.current.push({
-                    id: Math.random().toString(),
                     pos: { x: proj.pos.x, y: proj.pos.y },
                     vel: { x: -proj.vel.x * 0.1, y: -proj.vel.y * 0.1 }, // 惯性残留
                     life: 40, maxLife: 40, color: '#aaa', size: 6, gravity: 0, growth: 0.2, alphaDecay: 0.05
                 });
                 // 火焰中心
                 particlesRef.current.push({
-                    id: Math.random().toString(),
                     pos: { x: proj.pos.x, y: proj.pos.y },
                     vel: { x: -proj.vel.x * 0.5, y: -proj.vel.y * 0.5 },
                     life: 10, maxLife: 10, color: '#ff5500', size: 4, gravity: 0
                 });
             }
 
-            const target = entitiesRef.current.find(e => e.id !== proj.ownerId && !e.isDead);
+            const target = findEnemy(proj.ownerId);
             if (target) {
                 const targetX = target.pos.x;
                 const targetY = target.pos.y - 35; 
@@ -749,6 +2205,41 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
             }
         }
 
+        // --- C4 炸弹逻辑 ---
+        if (proj.type === 'c4') {
+            const h = proj.height || 12;
+            if (proj.c4State === 'flying') {
+                proj.vel.y += GRAVITY;
+                proj.pos.x += proj.vel.x;
+                proj.pos.y += proj.vel.y;
+
+                let landed = false;
+                if (proj.pos.y >= GROUND_Y - h / 2) {
+                    proj.pos.y = GROUND_Y - h / 2;
+                    landed = true;
+                } else if (proj.vel.y > 0) {
+                    platforms.forEach(plat => {
+                        if (proj.pos.x > plat.x && proj.pos.x < plat.x + plat.width &&
+                            proj.pos.y >= plat.y - h / 2 && proj.pos.y <= plat.y + 20) {
+                            proj.pos.y = plat.y - h / 2;
+                            landed = true;
+                        }
+                    });
+                }
+                if (landed) {
+                    proj.c4State = 'planted';
+                    proj.c4Fuse = 0;
+                    proj.vel = { x: 0, y: 0 };
+                    spawnParticles(proj.pos.x, proj.pos.y, '#a08c60', 6, 3, 0.5);
+                }
+            } else if (proj.c4State === 'planted') {
+                // 保险丝：约 5 秒后自动引爆，避免 C4 长期遗留
+                proj.c4Fuse = (proj.c4Fuse || 0) + 1;
+                if (proj.c4Fuse > 300) detonateC4(proj);
+            }
+            return;
+        }
+
         proj.pos.x += proj.vel.x;
         proj.pos.y += proj.vel.y;
 
@@ -759,7 +2250,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
             let hitGround = false;
              if (proj.pos.y >= GROUND_Y) { hitGround = true; }
              else if (proj.vel.y > 0) {
-                 PLATFORMS.forEach(plat => {
+                 platforms.forEach(plat => {
                      if (proj.pos.x > plat.x && proj.pos.x < plat.x + plat.width && 
                          proj.pos.y >= plat.y && proj.pos.y <= plat.y + 20) {
                          hitGround = true;
@@ -778,8 +2269,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                     
                     // 生成蘑菇云
                     spawnMushroomCloud(proj.pos.x, proj.pos.y - 10);
+                    spawnShockwave(proj.pos.x, proj.pos.y, '#ffe28a', 2.5);
                     
-                    // 冲击波伤害范围极大
+                    // 冲击波伤害范围极大：全场清空（含投掷者），双方同归于尽判平局
                     entitiesRef.current.forEach(target => {
                          if (!target.isDead) {
                              target.health = 0;
@@ -789,21 +2281,16 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                              const dir = target.pos.x - proj.pos.x > 0 ? 1 : -1;
                              target.vel.x = dir * 60;
                              target.vel.y = -60;
-                             
-                             if (target.id !== proj.ownerId) {
-                                 const winner = entitiesRef.current.find(e => e.id === proj.ownerId);
-                                 if (winner) triggerWin(winner.id);
-                             } else {
-                                 const enemy = entitiesRef.current.find(e => e.id !== proj.ownerId);
-                                 if (enemy) triggerWin(enemy.id);
-                             }
                          }
                     });
+                    triggerDraw();
 
                 } else {
-                    shakeRef.current = 25; 
+                    shakeRef.current = 25;
                     playExplodeSound();
-                    spawnParticles(proj.pos.x, proj.pos.y, '#ff4500', 40, 15, 2); 
+                    spawnParticles(proj.pos.x, proj.pos.y, '#ff4500', 40, 15, 2);
+                    spawnShockwave(proj.pos.x, proj.pos.y);
+                    spawnExplosionCloud(proj.pos.x, proj.pos.y - 10); 
                     
                     entitiesRef.current.forEach(target => {
                         if (!target.isDead) {
@@ -849,6 +2336,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                         if (isMissile) {
                              spawnParticles(target.pos.x, target.pos.y - 35, '#ff5500', 40, 10);
                              spawnParticles(target.pos.x, target.pos.y - 35, '#555', 20, 5);
+                             spawnShockwave(target.pos.x, target.pos.y - 35, '#ffe28a', 0.8);
                         } else {
                              spawnParticles(target.pos.x, target.pos.y - 35, '#ff0000', 10, 8);
                         }
@@ -869,9 +2357,32 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
             });
         }
     });
-    projectilesRef.current = projectilesRef.current.filter(p => p.active);
+    // 原地压缩失效的投射物：以前每帧 filter 一次，即使一个都没失效也要新建数组 + 新建闭包，
+    // 每秒 60 次白扔给 GC。读写双指针原地压缩，一个都没失效时零分配。
+    const projs = projectilesRef.current;
+    let keep = 0;
+    for (let i = 0; i < projs.length; i++) {
+      if (projs[i].active) projs[keep++] = projs[i];
+    }
+    projs.length = keep;
 
-    // === 3. 实体更新 ===
+    // === 3. 移动平台先走位 ===
+    // 必须在实体之前更新，这样本帧位移 dx/dy 才能用于把站在上面的角色一起带走
+    const layout = getLayout(map, canvas.width);
+    layout.movers.forEach(mv => {
+      const prevX = mv.x;
+      const prevY = mv.y;
+      const t = Math.sin(frameRef.current * (mv.speed ?? 0.02) + (mv.phase ?? 0));
+      if (mv.axis === 'y') {
+        mv.y = (mv.baseY ?? mv.y) + t * (mv.range ?? 60);
+      } else {
+        mv.x = (mv.baseX ?? mv.x) + t * (mv.range ?? 80);
+      }
+      mv.dx = mv.x - prevX;
+      mv.dy = mv.y - prevY;
+    });
+
+    // === 4. 实体更新 ===
     entitiesRef.current.forEach(entity => {
       // 检查武器是否过期
       if (entity.heldWeapon) {
@@ -884,13 +2395,35 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
 
       if (gameState === GameState.VICTORY_ANIMATION && entity.isWinner) {
           entity.isAttacking = false; entity.attackFrame = 0; entity.isCrouching = false;
+
+          const t = victoryFrameRef.current;
           const targetX = canvas.width / 2;
           const targetY = canvas.height / 3;
-          entity.pos.x += (targetX - entity.pos.x) * 0.05;
-          entity.pos.y += (targetY - entity.pos.y) * 0.05;
-          entity.pos.y += Math.sin(frameRef.current * 0.08) * 0.8;
+
+          // 缓动滑向中央（开始慢、越靠近越快，快速就位）
+          const ease = Math.min(0.04 + t * 0.003, 0.3);
+          entity.pos.x += (targetX - entity.pos.x) * ease;
+          entity.pos.y += (targetY - entity.pos.y) * ease;
+
+          // 就位后的三连庆祝小跳，幅度逐渐衰减
+          const hop = t > 40
+            ? Math.max(0, Math.sin((t - 40) / 9)) * 16 * Math.exp(-(t - 40) / 150)
+            : 0;
+          entity.pos.y -= hop;
+
           entity.vel.x = 0; entity.vel.y = 0;
-          if (frameRef.current % 3 === 0) spawnConfetti(canvas.width);
+
+          // 金色星光粒子从胜者身上升起
+          if (t % 2 === 0) {
+              particlesRef.current.push({
+                  pos: { x: entity.pos.x + (Math.random() - 0.5) * 60, y: entity.pos.y - 40 },
+                  vel: { x: (Math.random() - 0.5) * 2, y: -1 - Math.random() * 2 },
+                  life: 40 + Math.random() * 20, maxLife: 60,
+                  color: Math.random() > 0.5 ? '#FFD700' : '#fff7cc',
+                  size: 2 + Math.random() * 3, gravity: -0.02,
+              });
+          }
+          if (t % 4 === 0) spawnConfetti(canvas.width);
           return;
       }
 
@@ -919,6 +2452,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                     case 'pokemon': entity.ammo = 1; break; 
                     case 'laser': entity.ammo = 9; break; // 激光增加2倍，现在有9发
                     case 'zeperion': entity.ammo = 3; break; // 哉佩利敖光线3发
+                    case 'c4': entity.ammo = 2; break; // C4：埋设 / 引爆各消耗 1 发
+                    case 'piercer': entity.ammo = 3; break; // 穿地弹 3 发
+                    case 'aug': entity.ammo = 20; break; // AUG 20 发
+                    case 'gas': entity.ammo = 2; break; // 毒气弹 2 发
                 }
                 fallingItemsRef.current.splice(itemIndex, 1);
                 playJumpSound();
@@ -938,23 +2475,25 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           const currentFriction = entity.isCrouching && entity.isGrounded ? 0.4 : FRICTION;
           entity.vel.x *= currentFriction;
       } else {
-          entity.vel.x *= 0.99; 
+          entity.vel.x *= 0.9; // 倒地：滑一小段就停住
       }
 
       entity.pos.x += entity.vel.x;
       entity.pos.y += entity.vel.y;
 
       // 碰撞检测
+      // 出局的一方也要落回地面：以前这里用 isLoser 把地面夹紧整个跳过了，
+      // 尸体会被重力一直积分下去（实测 y 能飘到 20000+、x 漂到屏幕外），
+      // 在 4 秒胜利动画里就是一团"乱飞的异物"。
       entity.isGrounded = false;
       if (entity.pos.y >= GROUND_Y) {
-          if (!entity.isLoser) {
-            entity.pos.y = GROUND_Y;
-            entity.vel.y = 0;
-            entity.isGrounded = true;
-          }
+          entity.pos.y = GROUND_Y;
+          entity.vel.y = 0;
+          entity.vel.x *= 0.5;
+          entity.isGrounded = true;
       }
       if (entity.vel.y >= 0 && !entity.isDead) {
-          PLATFORMS.forEach(plat => {
+          platforms.forEach(plat => {
               if (entity.pos.x > plat.x - 10 && entity.pos.x < plat.x + plat.width + 10) {
                   if (prevY <= plat.y && entity.pos.y >= plat.y) {
                       entity.pos.y = plat.y;
@@ -963,14 +2502,69 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                   }
               }
           });
+
+          // 移动平台：可站立，并且横向/纵向移动时把站在上面的角色一起带走
+          layout.movers.forEach(mv => {
+              if (entity.pos.x <= mv.x - 10 || entity.pos.x >= mv.x + mv.width + 10) return;
+              const fallingOnto = prevY <= mv.y + 6 && entity.pos.y >= mv.y;
+              const riding = Math.abs(entity.pos.y - mv.y) <= 12 && entity.vel.y >= 0;
+              if (fallingOnto || riding) {
+                  entity.pos.y = mv.y;
+                  entity.vel.y = 0;
+                  entity.isGrounded = true;
+                  entity.pos.x += mv.dx ?? 0; // 横向载人
+              }
+          });
       }
 
-      if (!entity.isLoser) {
-        if (entity.pos.x < 10) { entity.pos.x = 10; entity.vel.x *= -0.5; }
-        if (entity.pos.x > canvas.width - 10) { entity.pos.x = canvas.width - 10; entity.vel.x *= -0.5; }
+      // 实心阻挡：顶面已经算进 platforms（可以跳上去），这里补侧面推出，避免直接穿过去
+      if (!entity.isDead) {
+          for (const b of layout.blocks) {
+              // 脚在箱子顶面以上说明是站在箱子上，不做水平推出
+              if (entity.pos.y <= b.y + 4) continue;
+              if (entity.pos.y - entity.height >= b.y + b.height) continue;
+              if (entity.pos.x + BODY_HALF_W <= b.x || entity.pos.x - BODY_HALF_W >= b.x + b.width) continue;
+              entity.pos.x = entity.pos.x < b.x + b.width / 2
+                  ? b.x - BODY_HALF_W
+                  : b.x + b.width + BODY_HALF_W;
+              entity.vel.x = 0;
+          }
       }
+
+      // 左右墙对出局的一方同样生效，否则尸体能一路漂出屏幕外
+      if (entity.pos.x < WALL_MARGIN) { entity.pos.x = WALL_MARGIN; entity.vel.x *= -0.5; }
+      if (entity.pos.x > canvas.width - WALL_MARGIN) { entity.pos.x = canvas.width - WALL_MARGIN; entity.vel.x *= -0.5; }
+
+      // 陷阱无敌帧即使处于硬直中也要继续倒数，否则会被连续判定
+      if (entity.spikeCooldown > 0) entity.spikeCooldown--;
 
       if (gameState === GameState.VICTORY_ANIMATION || entity.isDead || entity.stunFrames > 0) return;
+
+      // 伤害陷阱：踩到掉血 + 被弹开，靠 spikeCooldown 保证不会被瞬间抽干
+      if (entity.spikeCooldown === 0) {
+          for (const sp of layout.spikes) {
+              const onX = entity.pos.x + BODY_HALF_W > sp.x && entity.pos.x - BODY_HALF_W < sp.x + sp.width;
+              const onY = entity.pos.y >= sp.y - 8 && entity.pos.y <= sp.y + sp.height + 24;
+              if (!onX || !onY) continue;
+
+              entity.health = Math.max(0, entity.health - SPIKE_DAMAGE);
+              entity.spikeCooldown = SPIKE_COOLDOWN;
+              entity.stunFrames = 14;
+              entity.vel.y = -13;
+              entity.vel.x = (entity.pos.x < sp.x + sp.width / 2 ? -1 : 1) * 11;
+              spawnParticles(entity.pos.x, sp.y + 6, '#ef4444', 14, 7);
+              playHitSound();
+              shakeRef.current = Math.max(shakeRef.current, 10);
+
+              if (entity.health <= 0) {
+                  entity.isDead = true;
+                  entity.isLoser = true;
+                  const other = entitiesRef.current.find(e => e.id !== entity.id);
+                  if (other) triggerWin(other.id);
+              }
+              break;
+          }
+      }
 
       if (entity.attackCooldown > 0) entity.attackCooldown--;
       if (entity.isAttacking) {
@@ -1032,6 +2626,19 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                      if (distY < -100 || (Math.random() < 0.02)) {
                          jump = true;
                      }
+
+                     // 地形感知：前方是实心箱子就起跳翻过去，前方是陷阱就跳过去
+                     const dir = moveRight ? 1 : moveLeft ? -1 : 0;
+                     if (dir !== 0) {
+                         const blocked = layout.blocks.some(b =>
+                             entity.pos.y > b.y + 4 &&
+                             (dir > 0 ? b.x - entity.pos.x : entity.pos.x - (b.x + b.width)) < 46 &&
+                             (dir > 0 ? b.x + b.width > entity.pos.x : b.x < entity.pos.x));
+                         const spikeAhead = layout.spikes.some(sp =>
+                             (dir > 0 ? sp.x - entity.pos.x : entity.pos.x - (sp.x + sp.width)) < 60 &&
+                             (dir > 0 ? sp.x + sp.width > entity.pos.x : sp.x < entity.pos.x));
+                         if (blocked || spikeAhead) jump = true;
+                     }
                 }
                 
                 const absDistX = Math.abs(p1.pos.x - entity.pos.x);
@@ -1046,6 +2653,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                 if (entity.heldWeapon === 'pokemon') attackRange = 800;
                 if (entity.heldWeapon === 'laser') attackRange = 1000;
                 if (entity.heldWeapon === 'zeperion') attackRange = 1000;
+                if (entity.heldWeapon === 'c4') attackRange = 300;
+                if (entity.heldWeapon === 'piercer') attackRange = 700;
+                if (entity.heldWeapon === 'aug') attackRange = 900;
+                if (entity.heldWeapon === 'gas') attackRange = 600;
 
                 if (absDistX < attackRange && Math.abs(p1.pos.y - entity.pos.y) < 100) {
                     if (entity.attackCooldown === 0 && Math.random() < 0.05) attack = true;
@@ -1234,6 +2845,79 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
               });
 
               entity.ammo--;
+          } else if (entity.heldWeapon === 'c4') {
+              // == C4 炸弹：埋设 / 遥控引爆 ==
+              const plantedC4 = projectilesRef.current.find(p =>
+                  p.type === 'c4' && p.ownerId === entity.id && p.c4State === 'planted'
+              );
+              if (plantedC4) {
+                  // 引爆已埋设的 C4，消耗 1 发弹药
+                  detonateC4(plantedC4);
+                  entity.ammo--;
+              } else {
+                  // 埋设：向面前抛出一块 C4（埋设同样消耗 1 发弹药，避免无限埋雷）
+                  playShootSound();
+                  projectilesRef.current.push({
+                      id: Math.random().toString(36).slice(2) + Date.now(),
+                      type: 'c4',
+                      pos: { x: entity.pos.x + (entity.facingRight ? 32 : -32), y: entity.pos.y - 45 },
+                      vel: { x: entity.facingRight ? 6 : -6, y: -7 },
+                      ownerId: entity.id,
+                      width: 20, height: 12, active: true,
+                      c4State: 'flying'
+                  });
+                  entity.ammo--;
+              }
+          } else if (entity.heldWeapon === 'piercer') {
+              // == 穿地弹：抛出后钻入地下，潜行追踪并破土引爆 ==
+              playShootSound();
+              entity.vel.x += entity.facingRight ? -6 : 6;
+              projectilesRef.current.push({
+                  id: Math.random().toString(),
+                  type: 'piercer',
+                  pos: { x: entity.pos.x + (entity.facingRight ? 30 : -30), y: entity.pos.y - 45 },
+                  vel: { x: entity.facingRight ? 14 : -14, y: -10 },
+                  ownerId: entity.id,
+                  width: 20, height: 8, active: true,
+                  piercerState: 'flying',
+                  piercerDir: entity.facingRight ? 1 : -1,
+                  piercerTimer: 0
+              });
+              entity.ammo--;
+          } else if (entity.heldWeapon === 'aug') {
+              // == AUG 突击步枪：高速连发 ==
+              playShootSound();
+              entity.attackCooldown = 8; // 高射速
+              entity.vel.x += entity.facingRight ? -3 : 3; // 后坐力
+              const mx = entity.pos.x + (entity.facingRight ? 30 : -30);
+              const my = entity.pos.y - 42;
+              projectilesRef.current.push({
+                  id: Math.random().toString(),
+                  type: 'aug',
+                  pos: { x: mx, y: my },
+                  vel: { x: entity.facingRight ? 22 : -22, y: 0 },
+                  ownerId: entity.id,
+                  width: 4, height: 3, active: true,
+                  trail: []
+              });
+              spawnParticles(mx, my, '#ffe28a', 3, 3, 0.3, 2); // 枪口火光
+              entity.ammo--;
+          } else if (entity.heldWeapon === 'gas') {
+              // == 毒气弹：投掷，落地后形成持续 5 秒的毒气区域 ==
+              playShootSound();
+              entity.vel.x += entity.facingRight ? -4 : 4;
+              projectilesRef.current.push({
+                  id: Math.random().toString(),
+                  type: 'gas',
+                  pos: { x: entity.pos.x + (entity.facingRight ? 30 : -30), y: entity.pos.y - 45 },
+                  vel: { x: entity.facingRight ? 11 : -11, y: -9 },
+                  ownerId: entity.id,
+                  width: 16, height: 16, active: true,
+                  gasState: 'flying',
+                  gasTimer: 0,
+                  gasRadius: 0
+              });
+              entity.ammo--;
           } else {
               // == 近战武器 ==
               playAttackSound();
@@ -1251,7 +2935,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
 
               entity.vel.x = entity.facingRight ? selfPush : -selfPush;
 
-              const hitX = entity.facingRight ? entity.pos.x + range/2 : entity.pos.x - range/2;
               const hitY = entity.isCrouching ? entity.pos.y - 20 : entity.pos.y - 45;
               
               let hitSomething = false;
@@ -1300,10 +2983,78 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           // 弹药耗尽检查
           if (entity.heldWeapon && entity.ammo <= 0) {
               entity.heldWeapon = null;
-              spawnParticles(entity.pos.x, entity.pos.y - 40, '#888', 5, 5); 
+              spawnParticles(entity.pos.x, entity.pos.y - 40, '#888', 5, 5);
           }
       }
     });
+
+    /*
+      === 4.5 角色互推 ===
+      以前两个角色之间没有碰撞体积，相向而行会直接穿过去、然后各自顶死在左右墙上朝外挥拳，
+      实测一局能拖到 100 秒还分不出胜负（近战要求"面朝对方"，背对着永远打不中）。
+      这里在双方都走完之后做一次分离：把对方当成一堵墙，谁主动撞上去谁被挡回来。
+    */
+    if (gameState === GameState.PLAYING) {
+        const duo = entitiesRef.current;
+        if (duo.length === 2 && !duo[0].isDead && !duo[1].isDead) {
+            const [a, b] = duo;
+            const lo = WALL_MARGIN;
+            const hi = canvas.width - WALL_MARGIN;
+            const minGap = BODY_HALF_W * 2;
+
+            // 先各自夹进墙内，下面算"还能退多少"时才有准数
+            a.pos.x = Math.max(lo, Math.min(hi, a.pos.x));
+            b.pos.x = Math.max(lo, Math.min(hi, b.pos.x));
+
+            const dx = b.pos.x - a.pos.x;
+            // 竖直方向差得太多说明一个在平台上 / 跳到另一个头上了，这时不该横向互推，否则会被卡住
+            if (Math.abs(dx) < minGap && Math.abs(a.pos.y - b.pos.y) < 60) {
+                const dir = dx >= 0 ? 1 : -1;    // a 指向 b 的方向
+                const overlap = minGap - Math.abs(dx);
+                const aInto = a.vel.x * dir > 0; // a 正朝 b 撞过去
+                const bInto = b.vel.x * dir < 0; // b 正朝 a 撞过去
+
+                // 默认各让一半；只有一方在撞就由撞的人全让（站着不动的一方不该被推走）
+                const aWant = aInto === bInto ? overlap / 2 : (aInto ? overlap : 0);
+                const bWant = overlap - aWant;
+
+                // 让不动的那部分转嫁给对方：否则贴着墙的一方会被推进墙里，
+                // 下一帧墙又把他弹回来，两个人就在墙角抖个不停
+                const aRoom = dir > 0 ? a.pos.x - lo : hi - a.pos.x;
+                const bRoom = dir > 0 ? hi - b.pos.x : b.pos.x - lo;
+                let aGive = Math.min(aWant, aRoom);
+                let bGive = Math.min(bWant, bRoom);
+                const short = overlap - aGive - bGive;
+                if (short > 0) aGive += Math.min(short, aRoom - aGive);
+                if (short > 0) bGive += Math.min(short, bRoom - bGive);
+
+                a.pos.x -= dir * aGive;
+                b.pos.x += dir * bGive;
+            }
+        }
+    }
+
+    // === 5. 粒子更新（移动 / 消亡 / 缩放 / 淡出） ===
+    for (let i = particlesRef.current.length - 1; i >= 0; i--) {
+      const p = particlesRef.current[i];
+      p.life--;
+      if (p.life <= 0) {
+        particlesRef.current.splice(i, 1);
+        continue;
+      }
+      if (p.gravity !== undefined) p.vel.y += p.gravity;
+      p.pos.x += p.vel.x;
+      p.pos.y += p.vel.y;
+      if (p.growth) p.size += p.growth;
+      if (p.lineWidth !== undefined && p.lineWidthDecay) p.lineWidth = Math.max(0.5, p.lineWidth - p.lineWidthDecay);
+      if (p.alphaDecay !== undefined) {
+        const base = p.currentAlpha !== undefined ? p.currentAlpha : (p.life / p.maxLife);
+        p.currentAlpha = Math.max(0, base - p.alphaDecay);
+      }
+    }
+    if (particlesRef.current.length > MAX_PARTICLES) {
+      particlesRef.current.splice(0, particlesRef.current.length - MAX_PARTICLES);
+    }
   };
 
   const draw = () => {
@@ -1312,29 +3063,183 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
+      const platforms = getPlatforms(map, canvas.width);
+
       const shake = shakeRef.current;
       const shakeX = shake > 0 ? (Math.random() - 0.5) * shake : 0;
       const shakeY = shake > 0 ? (Math.random() - 0.5) * shake : 0;
 
       ctx.save();
       
-      // Clear & Background
-      ctx.fillStyle = '#0f172a';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      
+      // 背景（不随屏幕抖动，保持稳定）
+      if (map === 'forest') {
+          drawForestBackground(ctx, canvas.width, canvas.height, frameRef.current);
+      } else if (map === 'desert') {
+          drawDesertBackground(ctx, canvas.width, canvas.height, frameRef.current);
+      } else if (map === 'ocean') {
+          drawOceanBackground(ctx, canvas.width, canvas.height, frameRef.current);
+      } else if (map === 'volcano') {
+          drawVolcanoBackground(ctx, canvas.width, canvas.height, frameRef.current);
+      } else {
+          drawDynamicBackground(ctx, canvas.width, canvas.height, frameRef.current);
+      }
+
       ctx.translate(shakeX, shakeY);
 
-      // Draw Platforms
-      ctx.fillStyle = '#334155';
-      PLATFORMS.forEach(p => {
-          ctx.fillRect(p.x, p.y, p.width, p.height);
-          ctx.fillStyle = '#475569';
-          ctx.fillRect(p.x, p.y, p.width, 5);
-          ctx.fillStyle = '#334155';
-      });
+      // 静态平台层：材质不变，直接贴缓存好的位图（见 paintPlatforms 的说明）
+      {
+          const layer = getTerrainLayer(map, canvas, platforms);
+          if (layer.canvas) ctx.drawImage(layer.canvas, layer.x, layer.y);
+      }
+
       // Draw Ground
-      ctx.fillStyle = '#1e293b';
-      ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
+      if (map === 'forest') {
+          // 草地
+          ctx.fillStyle = '#4c9a3a';
+          ctx.fillRect(0, GROUND_Y - 4, canvas.width, 10);
+          ctx.fillStyle = '#3f7d2f';
+          ctx.fillRect(0, GROUND_Y + 6, canvas.width, 16);
+          // 草丛
+          ctx.fillStyle = '#5cb943';
+          for (let x = 0; x < canvas.width; x += 26) {
+              const gx = x + ((x / 26) % 2) * 8;
+              const gh = 5 + ((x * 7) % 6);
+              ctx.fillRect(gx, GROUND_Y - gh, 3, gh);
+          }
+          // 土壤
+          ctx.fillStyle = '#6b4a2b';
+          ctx.fillRect(0, GROUND_Y + 22, canvas.width, canvas.height - GROUND_Y - 22);
+          ctx.fillStyle = '#5a3d20';
+          ctx.fillRect(0, GROUND_Y + 70, canvas.width, canvas.height - GROUND_Y - 70);
+      } else if (map === 'desert') {
+          // 沙地
+          ctx.fillStyle = '#e8b96e';
+          ctx.fillRect(0, GROUND_Y - 2, canvas.width, 8);
+          ctx.fillStyle = '#dcae62';
+          ctx.fillRect(0, GROUND_Y + 6, canvas.width, 18);
+          ctx.fillStyle = '#c7954d';
+          ctx.fillRect(0, GROUND_Y + 24, canvas.width, canvas.height - GROUND_Y - 24);
+          // 沙面波纹
+          ctx.strokeStyle = 'rgba(120, 84, 40, 0.15)';
+          ctx.lineWidth = 2;
+          for (let x = 0; x < canvas.width; x += 60) {
+              ctx.beginPath();
+              ctx.moveTo(x, GROUND_Y + 10);
+              ctx.quadraticCurveTo(x + 30, GROUND_Y + 6, x + 60, GROUND_Y + 10);
+              ctx.stroke();
+          }
+      } else if (map === 'ocean') {
+          // 海底沙地
+          ctx.fillStyle = '#e8d8b0';
+          ctx.fillRect(0, GROUND_Y - 2, canvas.width, 10);
+          ctx.fillStyle = '#d9c596';
+          ctx.fillRect(0, GROUND_Y + 8, canvas.width, 20);
+          ctx.fillStyle = '#c0a878';
+          ctx.fillRect(0, GROUND_Y + 28, canvas.width, canvas.height - GROUND_Y - 28);
+          // 摇摆的海草
+          ctx.lineCap = 'round';
+          for (let i = 0; i < 7; i++) {
+              const bx = 90 + i * (canvas.width / 7.5) + 30;
+              const sway = Math.sin(frameRef.current * 0.02 + i) * 12;
+              ctx.strokeStyle = 'rgba(60, 150, 90, 0.6)';
+              ctx.lineWidth = 5;
+              ctx.beginPath();
+              ctx.moveTo(bx, GROUND_Y + 4);
+              ctx.quadraticCurveTo(bx + sway, GROUND_Y - 34, bx + sway * 1.4, GROUND_Y - 70);
+              ctx.stroke();
+              ctx.beginPath();
+              ctx.moveTo(bx + 12, GROUND_Y + 4);
+              ctx.quadraticCurveTo(bx + 12 + sway, GROUND_Y - 20, bx + 12 + sway * 1.2, GROUND_Y - 45);
+              ctx.stroke();
+          }
+      } else if (map === 'volcano') {
+          // 火山岩地面
+          ctx.fillStyle = '#2e1f1f';
+          ctx.fillRect(0, GROUND_Y - 2, canvas.width, 6);
+          ctx.fillStyle = '#392626';
+          ctx.fillRect(0, GROUND_Y + 4, canvas.width, 24);
+          ctx.fillStyle = '#241818';
+          ctx.fillRect(0, GROUND_Y + 28, canvas.width, canvas.height - GROUND_Y - 28);
+          // 顶部岩浆裂缝辉光
+          ctx.fillStyle = 'rgba(255, 120, 40, 0.9)';
+          ctx.fillRect(0, GROUND_Y - 3, canvas.width, 3);
+          ctx.strokeStyle = 'rgba(255, 90, 30, 0.55)';
+          ctx.lineWidth = 2;
+          for (let x = 30; x < canvas.width; x += 110) {
+              const wob = (x * 7) % 30;
+              ctx.beginPath();
+              ctx.moveTo(x, GROUND_Y - 3);
+              ctx.lineTo(x + wob * 0.4, GROUND_Y + 8);
+              ctx.lineTo(x - wob * 0.2, GROUND_Y + 22);
+              ctx.stroke();
+          }
+      } else {
+          ctx.fillStyle = '#1e293b';
+          ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
+
+          // 地平线辉光（科幻感的光带）
+          const horizonGrad = ctx.createLinearGradient(0, GROUND_Y - 40, 0, GROUND_Y + 12);
+          horizonGrad.addColorStop(0, 'rgba(99, 102, 241, 0)');
+          horizonGrad.addColorStop(0.7, 'rgba(99, 102, 241, 0.22)');
+          horizonGrad.addColorStop(1, 'rgba(34, 211, 238, 0.32)');
+          ctx.fillStyle = horizonGrad;
+          ctx.fillRect(0, GROUND_Y - 40, canvas.width, 52);
+
+          // 地面网格（缓慢滚动，增添科技感）
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
+          ctx.clip();
+          ctx.strokeStyle = 'rgba(94, 234, 212, 0.08)';
+          ctx.lineWidth = 1;
+          const gridOffset = (frameRef.current * 0.5) % 40;
+          for (let x = -40 + gridOffset; x < canvas.width + 40; x += 40) {
+            ctx.beginPath();
+            ctx.moveTo(x, GROUND_Y);
+            ctx.lineTo(x - 40, canvas.height);
+            ctx.stroke();
+          }
+          for (let y = GROUND_Y; y < canvas.height + 40; y += 24) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(canvas.width, y);
+            ctx.stroke();
+          }
+          ctx.restore();
+      }
+
+      // Draw Obstacles（随机地形：陷阱 / 箱子 / 移动平台，画在角色身后）
+      drawObstacles(ctx, map, getLayout(map, canvas.width));
+
+      // 胜利聚光灯 + 开场扩散光环（画在角色身后）
+      if (gameState === GameState.VICTORY_ANIMATION) {
+          const winner = entitiesRef.current.find(e => e.isWinner);
+          if (winner) {
+              const t = victoryFrameRef.current;
+              const cx = winner.pos.x;
+              const cy = winner.pos.y - 40;
+
+              // 聚光光斑（逐渐扩大）
+              const r = 90 + t * 1.5;
+              const spot = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+              spot.addColorStop(0, 'rgba(255, 235, 170, 0.30)');
+              spot.addColorStop(1, 'rgba(255, 235, 170, 0)');
+              ctx.fillStyle = spot;
+              ctx.beginPath();
+              ctx.arc(cx, cy, r, 0, Math.PI * 2);
+              ctx.fill();
+
+              // 开场扩散光环
+              if (t < 30) {
+                  const p = t / 30;
+                  ctx.strokeStyle = `rgba(255, 215, 0, ${1 - p})`;
+                  ctx.lineWidth = 8 * (1 - p) + 2;
+                  ctx.beginPath();
+                  ctx.arc(cx, cy, 30 + p * 140, 0, Math.PI * 2);
+                  ctx.stroke();
+              }
+          }
+      }
 
       // Draw Falling Items
       fallingItemsRef.current.forEach(item => {
@@ -1383,6 +3288,27 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
              ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 2;
              ctx.beginPath(); ctx.moveTo(-15, 0); ctx.lineTo(15, 0); ctx.stroke();
              ctx.beginPath(); ctx.moveTo(0, -15); ctx.lineTo(0, 15); ctx.stroke();
+        } else if (item.type === 'c4') {
+             // C4 炸药块图标
+             ctx.fillStyle = '#6b5a3e'; ctx.fillRect(-10, -6, 20, 12);
+             ctx.fillStyle = '#3f3625'; ctx.fillRect(-10, -6, 20, 3);
+             ctx.fillStyle = '#f00'; ctx.beginPath(); ctx.arc(4, 6, 3, 0, Math.PI*2); ctx.fill();
+        } else if (item.type === 'piercer') {
+             // 穿地弹图标
+             ctx.fillStyle = '#4b5563'; ctx.fillRect(-10, -4, 20, 8);
+             ctx.fillStyle = '#dc2626'; ctx.beginPath(); ctx.arc(10, 0, 4, 0, Math.PI*2); ctx.fill();
+             ctx.fillStyle = '#fbbf24'; ctx.fillRect(-14, -5, 4, 10);
+        } else if (item.type === 'aug') {
+             // AUG 突击步枪图标
+             ctx.fillStyle = '#2f3e46'; ctx.fillRect(-12, -4, 26, 8);
+             ctx.fillStyle = '#1f2a30'; ctx.fillRect(-10, -8, 8, 4);
+             ctx.fillStyle = '#8a5a30'; ctx.fillRect(-6, 4, 8, 6);
+             ctx.fillStyle = '#444'; ctx.fillRect(14, -3, 5, 4);
+        } else if (item.type === 'gas') {
+             // 毒气弹图标
+             ctx.fillStyle = '#3f7d2f'; ctx.fillRect(-7, -7, 14, 14);
+             ctx.fillStyle = '#2f5d22'; ctx.fillRect(-7, -7, 14, 4);
+             ctx.fillStyle = '#c9ff6b'; ctx.font = '10px sans-serif'; ctx.fillText('☠', -4, 5);
         }
         ctx.restore();
       });
@@ -1495,9 +3421,106 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                 }
            }
 
+           if (proj.type === 'gas') {
+               if (proj.gasState === 'cloud') {
+                   const R = proj.gasRadius || 120;
+                   const pulse = 1 + Math.sin(frameRef.current * 0.06) * 0.05;
+                   const g = ctx.createRadialGradient(proj.pos.x, proj.pos.y, 0, proj.pos.x, proj.pos.y, R * pulse);
+                   g.addColorStop(0, 'rgba(200, 255, 200, 0.4)');
+                   g.addColorStop(0.6, 'rgba(120, 220, 120, 0.25)');
+                   g.addColorStop(1, 'rgba(70, 170, 70, 0)');
+                   ctx.fillStyle = g;
+                   ctx.beginPath();
+                   ctx.arc(proj.pos.x, proj.pos.y, R * pulse, 0, Math.PI * 2);
+                   ctx.fill();
+
+                   // 内部翻涌的毒雾
+                   for (let i = 0; i < 4; i++) {
+                       const a = frameRef.current * 0.03 + (i * Math.PI) / 2;
+                       ctx.fillStyle = 'rgba(235, 255, 235, 0.3)';
+                       ctx.beginPath();
+                       ctx.arc(
+                           proj.pos.x + Math.cos(a) * R * 0.42,
+                           proj.pos.y + Math.sin(a) * R * 0.42,
+                           14, 0, Math.PI * 2
+                       );
+                       ctx.fill();
+                   }
+               } else {
+                   // 飞行中的毒气罐
+                   ctx.save();
+                   ctx.translate(proj.pos.x, proj.pos.y);
+                   ctx.fillStyle = '#3f7d2f';
+                   ctx.fillRect(-6, -6, 12, 12);
+                   ctx.fillStyle = '#2f5d22';
+                   ctx.fillRect(-6, -6, 12, 3);
+                   ctx.fillStyle = '#c9ff6b';
+                   ctx.font = '10px sans-serif';
+                   ctx.fillText('☠', -4, 4);
+                   ctx.restore();
+               }
+               return;
+           }
+
+           if (proj.type === 'aug') {
+               // 弹道拖尾
+               if (proj.trail && proj.trail.length > 1) {
+                   ctx.strokeStyle = 'rgba(255, 230, 150, 0.6)';
+                   ctx.lineWidth = 2;
+                   ctx.beginPath();
+                   ctx.moveTo(proj.trail[0].x, proj.trail[0].y);
+                   for (let i = 1; i < proj.trail.length; i++) {
+                       ctx.lineTo(proj.trail[i].x, proj.trail[i].y);
+                   }
+                   ctx.stroke();
+               }
+               // 弹头光点：同心圆代替 shadowBlur（同一帧可能有好几发在飞）
+               ctx.fillStyle = 'rgba(255, 226, 138, 0.35)';
+               ctx.beginPath();
+               ctx.arc(proj.pos.x, proj.pos.y, 6, 0, Math.PI * 2);
+               ctx.fill();
+               ctx.fillStyle = '#fff7cc';
+               ctx.beginPath();
+               ctx.arc(proj.pos.x, proj.pos.y, 2.5, 0, Math.PI * 2);
+               ctx.fill();
+               return;
+           }
+
+           if (proj.type === 'piercer') {
+               if (proj.piercerState === 'burrowing') {
+                   // 地面隆起的土堆
+                   ctx.fillStyle = '#6b4f2a';
+                   ctx.beginPath();
+                   ctx.arc(proj.pos.x, GROUND_Y, 16, Math.PI, 0);
+                   ctx.fill();
+                   ctx.fillStyle = '#4e3a1f';
+                   ctx.beginPath();
+                   ctx.arc(proj.pos.x, GROUND_Y, 9, Math.PI, 0);
+                   ctx.fill();
+                   ctx.fillStyle = '#3b2d17';
+                   ctx.beginPath();
+                   ctx.arc(proj.pos.x, GROUND_Y, 4, Math.PI, 0);
+                   ctx.fill();
+               } else {
+                   // 弹体（空中飞行 / 破土冲出）
+                   ctx.save();
+                   ctx.translate(proj.pos.x, proj.pos.y);
+                   const pa = Math.atan2(proj.vel.y, proj.vel.x);
+                   ctx.rotate(pa);
+                   ctx.fillStyle = '#4b5563';
+                   ctx.fillRect(-10, -4, 20, 8);
+                   ctx.fillStyle = '#dc2626';
+                   ctx.beginPath(); ctx.arc(10, 0, 4, 0, Math.PI * 2); ctx.fill();
+                   ctx.fillStyle = '#fbbf24';
+                   ctx.fillRect(-14, -5, 4, 10); // 尾焰/尾翼
+                   ctx.restore();
+               }
+               return;
+           }
+
            ctx.save();
            ctx.translate(proj.pos.x, proj.pos.y);
-           
+
            if (proj.type === 'bomb') {
                ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(0,0,8,0,Math.PI*2); ctx.fill();
            } else if (proj.type === 'atom_bomb') {
@@ -1513,6 +3536,18 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                ctx.beginPath(); ctx.moveTo(20,0); ctx.lineTo(-10, -15); ctx.lineTo(-10, 15); ctx.fill();
                ctx.fillStyle = '#374151';
                ctx.fillRect(-5, -30, 10, 60);
+           } else if (proj.type === 'c4') {
+               // C4 炸药块（埋设后红点闪烁）
+               ctx.fillStyle = '#6b5a3e';
+               ctx.fillRect(-8, -5, 16, 10);
+               ctx.fillStyle = '#3f3625';
+               ctx.fillRect(-8, -5, 16, 3);
+               if (proj.c4State === 'planted') {
+                   ctx.fillStyle = (Math.floor(frameRef.current / 8) % 2 === 0) ? '#ff0000' : '#660000';
+               } else {
+                   ctx.fillStyle = '#ff0000';
+               }
+               ctx.beginPath(); ctx.arc(5, 5, 2, 0, Math.PI * 2); ctx.fill();
            }
 
            ctx.restore();
@@ -1520,81 +3555,75 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
 
       // Draw Particles
       particlesRef.current.forEach(p => {
-          ctx.fillStyle = p.color;
           const alpha = p.currentAlpha !== undefined ? p.currentAlpha : (p.life / p.maxLife);
           ctx.globalAlpha = Math.max(0, alpha);
-          ctx.beginPath(); ctx.arc(p.pos.x, p.pos.y, p.size, 0, Math.PI * 2); ctx.fill();
+          if (p.kind === 'ring') {
+              ctx.strokeStyle = p.color;
+              ctx.lineWidth = p.lineWidth || 4;
+              ctx.beginPath(); ctx.arc(p.pos.x, p.pos.y, p.size, 0, Math.PI * 2); ctx.stroke();
+          } else {
+              ctx.fillStyle = p.color;
+              ctx.beginPath(); ctx.arc(p.pos.x, p.pos.y, p.size, 0, Math.PI * 2); ctx.fill();
+          }
           ctx.globalAlpha = 1.0;
       });
 
       // Draw Entities
+      const frame = frameRef.current;
       entitiesRef.current.forEach(entity => {
-          drawEntity(ctx, entity);
+          drawEntity(ctx, entity, frame);
           
-          // 绘制激光束
+          /*
+            光束（激光 / 哉佩利敖光线）。
+            两处改动：
+            1. 光束不再画 2000px 长 —— 只画到画布边缘。超出屏幕的部分本来就看不见，
+               却要跟着一起做描边和（原来的）模糊，纯属白烧。
+            2. 光晕用"由粗到细叠几层半透明描边"伪造，不再用 shadowBlur。
+               原来是对一条 2000px 的长线做 20/40px 高斯模糊，是全项目最贵的一笔，
+               而叠层描边只是多画几条线，观感几乎一样。
+          */
           if (entity.isAttacking && entity.heldWeapon === 'laser') {
               const startX = entity.pos.x + (entity.facingRight ? 20 : -20);
               const startY = entity.pos.y - 45;
-              const beamLength = 2000;
-              const endX = entity.facingRight ? startX + beamLength : startX - beamLength;
+              const endX = entity.facingRight ? canvas.width : 0;
+
+              const beam = (color: string, width: number) => {
+                  ctx.strokeStyle = color;
+                  ctx.lineWidth = width;
+                  ctx.beginPath();
+                  ctx.moveTo(startX, startY);
+                  ctx.lineTo(endX, startY);
+                  ctx.stroke();
+              };
 
               ctx.save();
-              // 外层光晕
-              ctx.shadowBlur = 20;
-              ctx.shadowColor = '#ff0000';
-              ctx.strokeStyle = 'rgba(255, 0, 0, 0.6)';
-              ctx.lineWidth = 12;
-              ctx.beginPath();
-              ctx.moveTo(startX, startY);
-              ctx.lineTo(endX, startY);
-              ctx.stroke();
-
-              // 内层核心
-              ctx.shadowBlur = 5;
-              ctx.strokeStyle = '#fff';
-              ctx.lineWidth = 4;
-              ctx.beginPath();
-              ctx.moveTo(startX, startY);
-              ctx.lineTo(endX, startY);
-              ctx.stroke();
+              beam('rgba(255, 0, 0, 0.16)', 34);  // 外层光晕（两层叠出柔和边缘）
+              beam('rgba(255, 0, 0, 0.32)', 20);
+              beam('rgba(255, 0, 0, 0.6)', 12);
+              beam('#ffffff', 4);                 // 内层核心
               ctx.restore();
           } else if (entity.isAttacking && entity.heldWeapon === 'zeperion') {
               // 绘制哉佩利敖光线（一道金光）
               const startX = entity.pos.x + (entity.facingRight ? 20 : -20);
               const startY = entity.pos.y - 45;
-              const beamLength = 2000;
-              const endX = entity.facingRight ? startX + beamLength : startX - beamLength;
+              const endX = entity.facingRight ? canvas.width : 0;
+
+              const beam = (color: string, width: number) => {
+                  ctx.strokeStyle = color;
+                  ctx.lineWidth = width;
+                  ctx.beginPath();
+                  ctx.moveTo(startX, startY);
+                  ctx.lineTo(endX, startY);
+                  ctx.stroke();
+              };
 
               ctx.save();
-              // 巨大的金色外层光晕
-              ctx.shadowBlur = 40;
-              ctx.shadowColor = '#fbbf24';
-              ctx.strokeStyle = 'rgba(251, 191, 36, 0.8)';
-              ctx.lineWidth = 30;
               ctx.lineCap = 'round';
-              ctx.beginPath();
-              ctx.moveTo(startX, startY);
-              ctx.lineTo(endX, startY);
-              ctx.stroke();
-
-              // 中层亮黄
-              ctx.shadowBlur = 10;
-              ctx.shadowColor = '#fef08a';
-              ctx.strokeStyle = 'rgba(254, 240, 138, 0.9)';
-              ctx.lineWidth = 15;
-              ctx.beginPath();
-              ctx.moveTo(startX, startY);
-              ctx.lineTo(endX, startY);
-              ctx.stroke();
-
-              // 内层核心白光
-              ctx.shadowBlur = 0;
-              ctx.strokeStyle = '#ffffff';
-              ctx.lineWidth = 6;
-              ctx.beginPath();
-              ctx.moveTo(startX, startY);
-              ctx.lineTo(endX, startY);
-              ctx.stroke();
+              beam('rgba(251, 191, 36, 0.18)', 64); // 巨大的金色外层光晕
+              beam('rgba(251, 191, 36, 0.34)', 44);
+              beam('rgba(251, 191, 36, 0.8)', 30);
+              beam('rgba(254, 240, 138, 0.9)', 15); // 中层亮黄
+              beam('#ffffff', 6);                   // 内层核心白光
               ctx.restore();
           }
       });
@@ -1608,17 +3637,78 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
       ctx.restore();
   };
 
-  const tick = () => {
-    update();
-    draw();
+  const tick = (now: number) => {
+    // 每帧同步世界尺寸，保证窗口缩放后地面 / 平台仍然可见
+    if (canvasRef.current) syncWorldSize(canvasRef.current);
+
+    // 固定步长：物理按固定 60Hz 推进，与显示器刷新率（60 / 120 / 144Hz）解耦。
+    // 否则高刷屏上重力、移动速度、冷却、计时都会成倍变快，绘制次数也跟着翻倍。
+    if (lastTimeRef.current === 0) lastTimeRef.current = now;
+    let delta = now - lastTimeRef.current;
+    lastTimeRef.current = now;
+    if (delta > 250) delta = FIXED_STEP; // 切后台 / 断点回来：丢弃积压时间，不补算
+    accRef.current += delta;
+
+    let steps = 0;
+    while (accRef.current >= FIXED_STEP && steps < MAX_STEPS_PER_FRAME) {
+      update();
+      accRef.current -= FIXED_STEP;
+      steps++;
+    }
+    if (steps === MAX_STEPS_PER_FRAME) accRef.current = 0; // 追不上就放弃积压，防止雪崩
+
+    // 两种情况跳过重绘：
+    // 1. 没推进逻辑帧 —— 画面与上一帧完全一致（高刷屏上很常见），省掉整帧光栅化；
+    // 2. 菜单 / 结算界面 —— MainMenu 与 GameOver 都是不透明的全屏遮罩（z-50），
+    //    canvas 100% 被盖住，这时再画一遍渐变底 + 星云 + 星空 + 地面 + 平台 + 障碍纯属白烧 GPU。
+    //    ⚠️ 若将来把菜单/结算改成半透明，必须把这里改回去，否则背景会静止。
+    const canvasCovered = gameState === GameState.MENU || gameState === GameState.GAME_OVER;
+    if (steps > 0 && !canvasCovered) draw();
+
+    // HUD 同步：每 5 帧检查一次签名，只有可见数值真的变了才触发 React 重渲染
+    if (
+      frameRef.current % 5 === 0 &&
+      (gameState === GameState.PLAYING || gameState === GameState.VICTORY_ANIMATION)
+    ) {
+      const sig = hudSignature(entitiesRef.current, statsRef.current);
+      if (sig !== hudSigRef.current) {
+        hudSigRef.current = sig;
+        setStats({ ...statsRef.current });
+        setPlayers(entitiesRef.current.map(e => ({ ...e })));
+      }
+    }
+
     requestRef.current = requestAnimationFrame(tick);
   };
+
+  // 窗口尺寸变化时，同步 canvas 实际像素尺寸
+  useEffect(() => {
+    const handleResize = () => {
+      if (canvasRef.current) {
+        canvasRef.current.width = window.innerWidth;
+        canvasRef.current.height = window.innerHeight;
+      }
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // 卸载时清理胜利结算定时器，避免对已卸载组件 setState
+  useEffect(() => {
+    return () => {
+      if (winTimeoutRef.current) clearTimeout(winTimeoutRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (canvasRef.current) {
         canvasRef.current.width = window.innerWidth;
         canvasRef.current.height = window.innerHeight;
     }
+    // 重开循环时清掉时间累积器，避免用上一局残留的时间戳算出一个巨大的 delta
+    lastTimeRef.current = 0;
+    accRef.current = 0;
     requestRef.current = requestAnimationFrame(tick);
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
@@ -1626,11 +3716,15 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
   }, [gameState]);
 
   return (
-    <canvas 
-        ref={canvasRef} 
+    <canvas
+        ref={canvasRef}
         className="block w-full h-full bg-slate-900"
     />
   );
 };
 
-export default GameCanvas;
+/*
+  memo：App 每次因 HUD 数据更新而重渲染时，GameCanvas 的 props（都是稳定引用 / 基本类型）
+  并未变化，跳过它的重渲染，避免每 100ms 重建一遍 update / draw / tick 闭包。
+*/
+export default React.memo(GameCanvas);

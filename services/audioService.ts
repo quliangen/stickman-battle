@@ -8,6 +8,34 @@ const getContext = () => {
     return audioCtx;
 };
 
+/*
+  爆炸白噪声 buffer 缓存（性能）：
+  原先 playExplodeSound() 每次调用都要同步跑 0.5s × sampleRate 次 Math.random()
+  （44.1kHz 下约 22050 次）填充噪声，而它在炸弹 / 导弹 / 原子弹 / 穿地弹 / C4 /
+  宝可梦命中 / 哉佩利敖等大量路径上都会触发，是单帧内的卡顿尖峰。
+  现在只生成一次并复用；AudioBuffer 必须由同一个 AudioContext 创建，
+  所以记录创建它的 ctx，一旦 ctx 被重建（引用不同）就重新生成。
+*/
+let noiseBuffer: AudioBuffer | null = null;
+let noiseBufferCtx: AudioContext | null = null;
+
+const getNoiseBuffer = (ctx: AudioContext): AudioBuffer => {
+    if (noiseBuffer && noiseBufferCtx === ctx) return noiseBuffer;
+
+    const bufferSize = ctx.sampleRate * 0.5; // 0.5秒
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+
+    // 白噪声
+    for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+    }
+
+    noiseBuffer = buffer;
+    noiseBufferCtx = ctx;
+    return buffer;
+};
+
 export const playJumpSound = () => {
     try {
         const ctx = getContext();
@@ -112,17 +140,9 @@ export const playExplodeSound = () => {
         const ctx = getContext();
         if (ctx.state === 'suspended') ctx.resume();
 
-        const bufferSize = ctx.sampleRate * 0.5; // 0.5秒
-        const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-        const data = buffer.getChannelData(0);
-
-        // 白噪声
-        for (let i = 0; i < bufferSize; i++) {
-            data[i] = Math.random() * 2 - 1;
-        }
-
         const noise = ctx.createBufferSource();
-        noise.buffer = buffer;
+        // 复用模块级缓存的噪声 buffer，不再每次同步生成（见 getNoiseBuffer）
+        noise.buffer = getNoiseBuffer(ctx);
 
         const gain = ctx.createGain();
         // 衰减

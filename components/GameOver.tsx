@@ -1,142 +1,170 @@
 import React, { useEffect, useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { GameState, GameStats } from '../types';
-import { getTacticalAnalysis } from '../services/geminiService';
+import { motion } from 'motion/react';
+import { GameStats } from '../types';
+import { PLAYS_PER_VERSION } from '../version';
+import { Progress } from '../services/progressService';
+import BurnoutCard from './BurnoutCard';
 
 interface GameOverProps {
   stats: GameStats;
   onRestart: () => void;
   onMenu: () => void;
-  sessionGameCount: number;
+  progress: Progress;
+  /** 本版本已玩满 PLAYS_PER_VERSION 局：不给重开，必须先升级版本 */
+  exhausted: boolean;
   sessionStartTime: number;
   onResetSession: () => void;
-  lockoutUntil: number | null;
 }
 
-const GameOver: React.FC<GameOverProps> = ({ stats, onRestart, onMenu, sessionGameCount, sessionStartTime, onResetSession, lockoutUntil }) => {
-  const [analysis, setAnalysis] = useState<string>("");
-  const [loading, setLoading] = useState(true);
+const GameOver: React.FC<GameOverProps> = ({ stats, onRestart, onMenu, progress, exhausted, sessionStartTime, onResetSession }) => {
   const [canRestart, setCanRestart] = useState(false);
-  const [timeLeft, setTimeLeft] = useState<string>("");
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [elapsed, setElapsed] = useState(() => Math.floor((Date.now() - sessionStartTime) / 60000));
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-        if (!lockoutUntil || Date.now() > lockoutUntil) {
-            setCanRestart(true);
-        }
-    }, 1000);
-
-    let isMounted = true;
-    getTacticalAnalysis(stats).then(text => {
-      if (isMounted) {
-        setAnalysis(text);
-        setLoading(false);
-      }
-    });
-
+    // 结算界面刚出现时留 1 秒冷却：小朋友往往还按着上一局的方向键/攻击键，
+    // 没有这段缓冲就会「刚看到胜利画面就自己开下一局了」。
+    const timer = setTimeout(() => setCanRestart(true), 1000);
     const interval = setInterval(() => {
-        if (lockoutUntil) {
-            const diff = lockoutUntil - Date.now();
-            if (diff > 0) {
-                const m = Math.floor(diff / 60000);
-                const s = Math.floor((diff % 60000) / 1000);
-                setTimeLeft(`${m}:${s.toString().padStart(2, '0')}`);
-                setCanRestart(false);
-            } else {
-                setTimeLeft("");
-                setCanRestart(true);
-            }
-        }
+      setElapsed(Math.floor((Date.now() - sessionStartTime) / 60000));
     }, 1000);
 
     return () => {
       clearTimeout(timer);
       clearInterval(interval);
-      isMounted = false;
     };
-  }, [stats, lockoutUntil]);
+  }, [sessionStartTime]);
+
+  const restartEnabled = canRestart && !exhausted;
+
+  const isDraw = stats.winner !== 'P1' && stats.winner !== 'P2';
+  const winnerText = isDraw ? '平局！' : (stats.winner === 'P1' ? '蓝方 胜利！' : '黄方 胜利！');
+  // 胜利标题按阵营着色：蓝方蓝金、黄方橙金、平局紫粉
+  const winnerGradient = isDraw
+    ? 'from-fuchsia-300 to-violet-700'
+    : (stats.winner === 'P1' ? 'from-sky-300 to-blue-700' : 'from-amber-200 to-orange-600');
+  const winnerBadge = isDraw ? '🤝' : '🏆';
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-sky-400/90 backdrop-blur-md text-white p-8"
+      className="absolute inset-0 z-50 overflow-y-auto text-white
+        bg-gradient-to-b from-indigo-600 via-violet-500 to-sky-400"
     >
+      {/* 背景装饰 */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_25%,rgba(255,255,255,0.28),transparent_60%)]" />
+        {['🎊', '⭐', '✨', '🎊', '⭐'].map((e, i) => (
+          <motion.div
+            key={i}
+            animate={{ y: [0, -18, 0], rotate: [-8, 8, -8] }}
+            transition={{ duration: 4 + i, repeat: Infinity, ease: 'easeInOut' }}
+            className="absolute text-5xl opacity-40 select-none"
+            style={{ left: `${8 + i * 21}%`, top: `${12 + (i % 3) * 22}%` }}
+          >
+            {e}
+          </motion.div>
+        ))}
+      </div>
+
+      {/* 内容区：窗口够高时居中，窗口偏矮时可滚动（燃尽卡片会让内容高不少） */}
+      <div className="relative min-h-full w-full flex flex-col items-center justify-center px-8 py-6">
+
       {/* 胜利者展示 */}
-      <motion.div 
+      <motion.div
         initial={{ scale: 0.8, y: -20 }}
         animate={{ scale: 1, y: 0 }}
-        transition={{ type: "spring", bounce: 0.5 }}
-        className="text-center mb-8"
+        transition={{ type: 'spring', bounce: 0.5 }}
+        className={`relative z-10 text-center ${exhausted ? 'mb-3' : 'mb-6'}`}
       >
-        <div className="text-2xl font-bold text-yellow-300 mb-2 drop-shadow-md">🎉 比赛结束啦 🎉</div>
-        <h2 className="text-7xl font-black text-white drop-shadow-[0_5px_5px_rgba(0,0,0,0.2)] tracking-widest" style={{ WebkitTextStroke: '2px #2563eb' }}>
-            {stats.winner === 'P1' ? '蓝方 胜利！' : (stats.winner === 'P2' ? '黄方 胜利！' : '平局！')}
-        </h2>
-      </motion.div>
-      
-      {/* AI 分析卡片 */}
-      <motion.div 
-        initial={{ y: 20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.3 }}
-        className="bg-white border-4 border-blue-300 p-6 rounded-3xl max-w-2xl w-full mb-8 shadow-xl relative overflow-hidden"
-      >
-        <h3 className="text-xl font-bold text-blue-500 mb-3 flex items-center gap-2">
-           🤖 裁判点评
-           {loading && <motion.span animate={{ rotate: 360 }} transition={{ repeat: Infinity, ease: "linear" }}>⏳</motion.span>}
-        </h3>
-        <p className={`text-lg leading-relaxed font-medium ${loading ? 'animate-pulse text-gray-400' : 'text-gray-700'}`}>
-          {loading ? "正在思考刚才的精彩瞬间..." : analysis}
-        </p>
+        <div className={`inline-flex items-center gap-2 font-black text-amber-900 bg-amber-300 border-4 border-white rounded-full px-6 shadow-lg
+          ${exhausted ? 'text-base py-0.5 mb-2' : 'text-lg py-1 mb-4'}`}>
+          🎉 比赛结束啦 🎉
+        </div>
+        <div className="flex items-center justify-center gap-4">
+          <motion.span
+            animate={{ rotate: [-12, 12, -12], scale: [1, 1.12, 1] }}
+            transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
+            className={exhausted ? 'text-5xl drop-shadow-lg' : 'text-7xl drop-shadow-lg'}
+          >
+            {winnerBadge}
+          </motion.span>
+          <h2
+            className={`${exhausted ? 'text-5xl' : 'text-7xl'} font-black tracking-widest text-transparent bg-clip-text bg-gradient-to-b ${winnerGradient}
+              drop-shadow-[0_6px_0_rgba(30,27,75,0.45)]`}
+            style={{ WebkitTextStroke: '3px #ffffff' }}
+          >
+            {winnerText}
+          </h2>
+        </div>
       </motion.div>
 
-      {/* 防沉迷提示 */}
-      <AnimatePresence>
-        {lockoutUntil && timeLeft && (
-            <motion.div 
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                className="mb-8 p-6 bg-red-100 border-4 border-red-400 rounded-3xl text-center w-full max-w-md shadow-lg"
-            >
-                <h4 className="text-xl font-bold text-red-600 mb-2">⏰ 休息时间到啦！</h4>
-                <p className="text-lg text-red-500 mb-2">保护眼睛，去看看远方吧~</p>
-                <p className="text-4xl font-black text-red-600 drop-shadow-sm">{timeLeft}</p>
-            </motion.div>
-        )}
-      </AnimatePresence>
+      {/* 本局数据 */}
+      <motion.div
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.15 }}
+        className={`relative z-10 flex gap-4 ${exhausted ? 'mb-3' : 'mb-6'}`}
+      >
+        <div className="min-w-[8rem] bg-white/20 border-4 border-white/70 rounded-2xl px-6 py-3 text-center backdrop-blur-sm shadow-lg">
+          <div className="font-body text-sm font-bold text-white/80">本局时长</div>
+          <div className="text-3xl font-black tabular-nums">
+            {Math.floor(stats.duration / 60).toString().padStart(2, '0')}:{Math.floor(stats.duration % 60).toString().padStart(2, '0')}
+          </div>
+        </div>
+        <div className="min-w-[8rem] bg-white/20 border-4 border-white/70 rounded-2xl px-6 py-3 text-center backdrop-blur-sm shadow-lg">
+          <div className="font-body text-sm font-bold text-white/80">游戏模式</div>
+          <div className="text-3xl font-black">{stats.mode === 'PVP' ? '双人' : '单人'}</div>
+        </div>
+      </motion.div>
+
+      {/* 版本燃尽提示：玩满 PLAYS_PER_VERSION 局后出现，同时锁住"再玩一局" */}
+      {exhausted && <BurnoutCard />}
 
       {/* 交互按钮 */}
-      <div className="flex gap-6">
-        <motion.button 
-          whileHover={{ scale: 1.05, y: -2 }}
+      <div className="relative z-10 flex gap-6 mt-4">
+        <motion.button
+          whileHover={{ scale: 1.05, y: -3 }}
           whileTap={{ scale: 0.95, y: 0 }}
           onClick={onMenu}
-          className="px-8 py-4 bg-blue-500 hover:bg-blue-400 border-4 border-white shadow-[0_6px_0_0] shadow-blue-700 rounded-full text-2xl font-black text-white transition-all"
+          className="px-8 py-4 bg-white/25 hover:bg-white/35 border-4 border-white rounded-full text-2xl font-black text-white
+            shadow-[0_7px_0_0_rgba(0,0,0,0.3)] transition-all"
         >
           🏠 回到主页
         </motion.button>
-        <motion.button 
-          whileHover={canRestart ? { scale: 1.05, y: -2 } : {}}
-          whileTap={canRestart ? { scale: 0.95, y: 0 } : {}}
+        <motion.button
+          whileHover={restartEnabled ? { scale: 1.05, y: -3 } : {}}
+          whileTap={restartEnabled ? { scale: 0.95, y: 0 } : {}}
           onClick={onRestart}
-          disabled={!canRestart}
-          className={`px-8 py-4 border-4 border-white rounded-full text-2xl font-black transition-all ${
-            canRestart 
-              ? 'bg-yellow-400 hover:bg-yellow-300 text-white shadow-[0_6px_0_0] shadow-yellow-600' 
-              : 'bg-gray-300 text-gray-500 border-gray-400 shadow-none cursor-not-allowed'
+          disabled={!restartEnabled}
+          className={`px-8 py-4 border-4 rounded-full text-2xl font-black transition-all ${
+            restartEnabled
+              ? 'bg-gradient-to-b from-amber-300 to-yellow-500 border-white text-amber-950 shadow-[0_7px_0_0_rgba(120,53,15,0.6)]'
+              : 'bg-slate-500/50 text-white/60 border-white/40 shadow-none cursor-not-allowed'
           }`}
         >
-          {timeLeft ? `休息中 (${timeLeft})` : (canRestart ? '🔄 再玩一局' : '准备中...')}
+          {exhausted ? '🔋 版本已燃尽' : (canRestart ? '🔄 再玩一局' : '准备中...')}
         </motion.button>
       </div>
-      
-      {/* 会话统计 */}
-      <div className="mt-12 flex gap-8 text-sm font-bold text-blue-800 bg-white/40 px-6 py-2 rounded-full">
-          <div>已经玩了: <span className="text-blue-900">{sessionGameCount} 局</span></div>
-          <div>游戏时间: <span className="text-blue-900">{Math.floor((Date.now() - sessionStartTime)/60000)} 分钟</span></div>
-          <button onClick={onResetSession} className="hover:text-blue-600 transition-colors underline underline-offset-4">重置时间</button>
+
+      {/* 会话统计（重置需要二次确认，避免小朋友误触） */}
+      <div className="relative z-10 mt-5 flex items-center gap-6 font-body text-sm font-bold text-white bg-white/20 border-2 border-white/60 px-6 py-2 rounded-full">
+          <div>本版本已玩 <span className="text-lg font-black tabular-nums">{progress.plays} / {PLAYS_PER_VERSION}</span> 局</div>
+          <div className="w-px h-5 bg-white/50" />
+          <div>游戏时间 <span className="text-lg font-black">{elapsed}</span> 分钟</div>
+          <div className="w-px h-5 bg-white/50" />
+          {confirmReset ? (
+            <span className="flex items-center gap-2">
+              <button onClick={() => { onResetSession(); setConfirmReset(false); }} className="px-3 py-0.5 rounded-full bg-red-500 border-2 border-white font-black">确认重置</button>
+              <button onClick={() => setConfirmReset(false)} className="px-3 py-0.5 rounded-full bg-white/30 border-2 border-white/70 font-black">取消</button>
+            </span>
+          ) : (
+            <button onClick={() => setConfirmReset(true)} className="hover:text-amber-200 transition-colors underline underline-offset-4">
+              家长重置
+            </button>
+          )}
+      </div>
       </div>
     </motion.div>
   );

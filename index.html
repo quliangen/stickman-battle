@@ -4,31 +4,68 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>火柴人传说：双重乱斗</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <meta name="theme-color" content="#0b1230" />
+    <!--
+      字体加载（性能）：用 <link> 替代 CSS 里的 @import。
+      @import 是串行阻塞请求：浏览器要先拿到本页 CSS 才能发现它，再去请求字体 CSS，
+      中文字体（Noto Sans SC）本身体积又大，会明显推迟首屏；
+      离线时这个请求还会白等到超时。preconnect 提前把 DNS/TLS 握手做掉。
+      字体族名与字重保持与原先一致（.font-body / .tabular-nums 依赖它们）。
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=ZCOOL+QingKe+HuangYou&family=Noto+Sans+SC:wght@400;500;700;900&family=Inter:wght@400;700;900&display=swap"
+    />
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=JetBrains+Mono:wght@400;700&display=swap');
+      /*
+        字体方案（面向 7~8 岁儿童）：
+        1. 主字体 = 站酷庆科黄油体：笔画粗、字形圆润，卡通可爱且辨识度高
+        2. 小字 = Noto Sans SC：正文级可读性，避免小字号下卡通字形糊在一起
+        3. 数字 = Inter 等宽数字，倒计时 / 血量跳动时不会左右抖动
+        离线时依次回退到系统圆体（macOS 圆体 / Windows 幼圆）与黑体
+      */
       body {
-        font-family: 'Inter', sans-serif;
+        font-family: 'ZCOOL QingKe HuangYou', 'Yuanti SC', 'YouYuan', 'PingFang SC', 'Microsoft YaHei', sans-serif;
         background-color: #050505;
         overflow: hidden;
         user-select: none;
+        -webkit-tap-highlight-color: transparent;
       }
-      .font-mono {
-        font-family: 'JetBrains Mono', monospace;
+      /* 小字号正文用字体（HUD 提示、标签等） */
+      .font-body {
+        font-family: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      }
+      /* 数字使用等宽字体，倒计时 / 血量跳动时不会左右抖动 */
+      .tabular-nums {
+        font-family: 'Inter', 'Noto Sans SC', 'PingFang SC', sans-serif;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /*
+        HUD 常驻动画一律用 CSS keyframes + transform/opacity 实现：
+        这类动画跑在合成器线程，不占用主线程，也不会触发 layout / paint。
+        游戏主循环本身就在主线程上跑 rAF，HUD 若再用 JS 逐帧改样式会直接抢帧。
+      */
+      @keyframes hud-bob {
+        0%, 100% { transform: scale(1) rotate(-5deg); }
+        50%      { transform: scale(1.14) rotate(5deg); }
+      }
+      .hud-bob { animation: hud-bob 1.6s ease-in-out infinite; will-change: transform; }
+
+      @keyframes hud-danger {
+        0%, 100% { transform: scale(1); }
+        50%      { transform: scale(1.08); }
+      }
+      .hud-danger { animation: hud-danger 0.7s ease-in-out infinite; will-change: transform; }
+
+      /* 系统开启"减少动态效果"时关闭常驻动画 */
+      @media (prefers-reduced-motion: reduce) {
+        .hud-bob, .hud-danger { animation: none; }
       }
     </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://esm.sh/react@^19.2.3",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "@google/genai": "https://esm.sh/@google/genai@^1.33.0"
-  }
-}
-</script>
-<link rel="stylesheet" href="/index.css">
-</head>
+  </head>
   <body>
     <div id="root"></div>
   <script type="module" src="/index.tsx"></script>

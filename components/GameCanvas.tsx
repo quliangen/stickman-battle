@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useCallback } from 'react';
-import { GameState, Entity, Vector, Particle, GameStats, GameMode, MapType, FallingItem, Projectile, WeaponType, Platform, Obstacle } from '../types';
+import { GameState, Entity, Vector, Particle, GameStats, GameMode, MapType, FallingItem, Projectile, WeaponType, Platform, Obstacle, AnyWeaponId } from '../types';
 import { playJumpSound, playAttackSound, playHitSound, playShootSound, playExplodeSound, playDragonRoar } from '../services/audioService';
+import { getDropPool, getCustom, isBuiltinDisabled, isCustomId } from '../services/weaponService';
 
 interface GameCanvasProps {
   gameState: GameState;
@@ -56,7 +57,133 @@ const NEBULAE = [
   { sx: 0.85, sy: 0.78, sr: 0.36, c: '34, 211, 238', a: 0.10 }, // 蓝绿
 ];
 
-const drawDynamicBackground = (
+// ================= 霓虹都市天际线 =================
+/*
+  图名叫"霓虹都市"，以前背景却只有一片星空，这条天际线补上"城市"那部分。
+  楼是静止的：整排楼画进离屏画布缓存，每帧只 drawImage 一次（和 paintPlatforms 一个思路），
+  否则几百扇窗户逐帧重画，把省下来的光栅化又吃回去了。
+  楼的排布用固定种子的 PRNG 生成 —— 窗口尺寸变化触发重画时楼不能跟着重新洗牌，
+  否则 resize 一下整条街都变了样。每帧额外画的只有几盏楼顶信号灯（见 drawNeonBackground）。
+*/
+interface CityBuilding {
+  x: number;       // 左边缘，归一化 0..1
+  w: number;       // 宽，归一化
+  h: number;       // 高，0..1（相对楼高上限 CITY_MAX_H）
+  tone: number;    // 0..1，决定楼体深浅
+  antenna: boolean;
+  neon: number;    // > 0.72 的楼顶描霓虹边
+}
+
+const CITY_BUILDINGS: CityBuilding[] = (() => {
+  const rand = mulberry32(20260923);
+  const arr: CityBuilding[] = [];
+  let x = -0.04;
+  while (x < 1.04) {
+    const w = 0.05 + rand() * 0.075;
+    arr.push({ x, w, h: 0.3 + rand() * 0.7, tone: rand(), antenna: rand() < 0.3, neon: rand() });
+    x += w + rand() * 0.024 - 0.008; // 偶尔留缝，偶尔楼贴楼
+  }
+  return arr;
+})();
+
+// 楼顶红色航空障碍灯：取自带天线的楼（也是固定种子，位置稳定）
+const CITY_BEACONS = (() => {
+  const rand = mulberry32(20260115);
+  return CITY_BUILDINGS.filter((b) => b.antenna)
+    .slice(0, 6)
+    .map((b) => ({
+      x: b.x + b.w / 2, // 归一化中心
+      h: b.h,
+      phase: rand() * Math.PI * 2,
+      speed: 0.04 + rand() * 0.05,
+    }));
+})();
+
+const CITY_WINDOW_COLORS = ['103, 232, 249', '240, 171, 252', '253, 230, 138', '134, 239, 172']; // 青 / 品红 / 暖黄 / 绿
+
+let cityCanvas: HTMLCanvasElement | null = null;
+let cityKey = '';
+let cityStripTop = 0; // 缓存条带画到主画布时的 y 起点
+let CITY_MAX_H = 0;   // 当前布局下楼高的像素上限（信号灯定位也要用）
+
+const getCityLayer = (w: number): HTMLCanvasElement | null => {
+  const key = `${Math.round(w)}x${Math.round(GROUND_Y)}`;
+  if (cityCanvas && cityKey === key) return cityCanvas;
+  if (!cityCanvas) cityCanvas = document.createElement('canvas');
+
+  const ground = GROUND_Y;
+  // 楼高上限：不超过地平线上方天空的 55%，再高会压住平台上的战斗
+  CITY_MAX_H = Math.min(ground * 0.55, 320);
+  const stripH = Math.ceil(CITY_MAX_H + 26); // +26 = 天线 13 + 霓虹光晕外沿
+  cityStripTop = ground - stripH;
+
+  cityCanvas.width = Math.max(1, Math.round(w));
+  cityCanvas.height = Math.max(1, stripH);
+  const cctx = cityCanvas.getContext('2d');
+  if (!cctx) return cityCanvas;
+
+  // 改 width/height 会连同绘图状态一起重置，所以 translate 是在干净状态上做的：
+  // 把原点挪到条带左上角，楼照旧按世界坐标 (x, ground) 画
+  cctx.translate(0, -cityStripTop);
+
+  CITY_BUILDINGS.forEach((b, bi) => {
+    const bx = b.x * w;
+    const bw = b.w * w;
+    const bh = b.h * CITY_MAX_H;
+    const by = ground - bh;
+
+    // 楼体：很深的蓝紫，深浅略有差异，免得一排楼糊成一整块
+    const d = 8 + b.tone * 10;
+    cctx.fillStyle = `rgb(${d}, ${d + 2}, ${d + 16})`;
+    cctx.fillRect(bx, by, bw, bh);
+
+    // 亮窗：6x8 的小格子按 12x16 的间距铺，约四成是亮的。
+    // 每栋楼单独一个种子：窗口变了这栋楼的亮窗只在楼内重排，不会串到隔壁楼
+    const rand = mulberry32(20260707 + bi);
+    const cols = Math.floor(bw / 12);
+    const rows = Math.floor(bh / 16);
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (rand() > 0.42) continue;
+        const wc = CITY_WINDOW_COLORS[Math.floor(rand() * CITY_WINDOW_COLORS.length)];
+        cctx.fillStyle = `rgba(${wc}, ${0.25 + rand() * 0.6})`;
+        cctx.fillRect(bx + 3 + c * 12, by + 5 + r * 16, 6, 8);
+      }
+    }
+
+    // 天线：屋顶一根细杆，顶端的红灯由 drawNeonBackground 每帧闪
+    if (b.antenna) {
+      cctx.strokeStyle = 'rgba(30, 34, 58, 0.9)';
+      cctx.lineWidth = 2;
+      cctx.beginPath();
+      cctx.moveTo(bx + bw / 2, by);
+      cctx.lineTo(bx + bw / 2, by - 13);
+      cctx.stroke();
+    }
+
+    // 霓虹顶边：两笔叠出光晕（宽半透明 + 窄实色），同移动平台的思路，不用 shadowBlur
+    if (b.neon > 0.72) {
+      const nc = b.neon > 0.87 ? '240, 171, 252' : '34, 211, 238'; // 品红或青
+      cctx.strokeStyle = `rgba(${nc}, 0.35)`;
+      cctx.lineWidth = 5;
+      cctx.beginPath();
+      cctx.moveTo(bx, by);
+      cctx.lineTo(bx + bw, by);
+      cctx.stroke();
+      cctx.strokeStyle = `rgba(${nc}, 0.95)`;
+      cctx.lineWidth = 1.6;
+      cctx.beginPath();
+      cctx.moveTo(bx, by);
+      cctx.lineTo(bx + bw, by);
+      cctx.stroke();
+    }
+  });
+
+  cityKey = key;
+  return cityCanvas;
+};
+
+const drawNeonBackground = (
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
@@ -103,24 +230,29 @@ const drawDynamicBackground = (
   }
   ctx.globalAlpha = 1;
 
-  // 4. 流星（周期性划过）
-  const meteorPeriod = 260;
-  const meteorPhase = frame % meteorPeriod;
-  if (meteorPhase < 55) {
-    const p = meteorPhase / 55; // 0..1
-    const len = 120 + p * 40;
-    const x0 = w * (1.05 - 0.9 * p);
-    const y0 = h * (0.05 + 0.45 * p);
-    const grad = ctx.createLinearGradient(x0 - len, y0 - len * 0.5, x0, y0);
-    grad.addColorStop(0, 'rgba(255, 255, 255, 0)');
-    grad.addColorStop(1, 'rgba(255, 255, 255, 0.9)');
-    ctx.strokeStyle = grad;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(x0 - len, y0 - len * 0.5);
-    ctx.lineTo(x0, y0);
-    ctx.stroke();
+  // 4. 城市天际线（整排楼已画进离屏缓存，每帧只贴一次；见 getCityLayer 的说明）
+  {
+    const layer = getCityLayer(w);
+    if (layer) ctx.drawImage(layer, 0, cityStripTop);
   }
+
+  // 5. 楼顶信号灯：唯一每帧重画的部分。几盏红色航空障碍灯轮流闪，城市才像活的 —— 开销只有几个圆点
+  const ground = GROUND_Y;
+  CITY_BEACONS.forEach((b) => {
+    const blink = Math.sin(frame * b.speed + b.phase);
+    if (blink <= 0.2) return; // 大部分时间灭着，闪一下才有"灯"的感觉
+    const bx = b.x * w;
+    const by = ground - b.h * CITY_MAX_H - 13;
+    const alpha = 0.35 + 0.65 * blink;
+    ctx.fillStyle = `rgba(248, 113, 113, ${alpha * 0.3})`;
+    ctx.beginPath();
+    ctx.arc(bx, by, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = `rgba(254, 202, 202, ${alpha})`;
+    ctx.beginPath();
+    ctx.arc(bx, by, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+  });
 };
 
 // ================= 森林动态背景 =================
@@ -394,11 +526,17 @@ const drawOceanBackground = (
   });
 
   // 4. 游动的小鱼
+  /*
+    速度原来是 18~36 px/帧（≈1100~2200 px/s），一条鱼一秒多就横穿整个屏幕，根本不是游是飞。
+    改成 0.7~1.8 px/帧（≈40~110 px/s），横穿要十几秒，才有鱼群慢慢游的感觉。
+    游速降下来之后，死板的三角尾巴会很显眼，所以加了摆尾和眼睛。
+  */
   for (let i = 0; i < 4; i++) {
     const dir = i % 2 === 0 ? 1 : -1;
-    const speed = 18 + i * 6;
+    const speed = 0.7 + i * 0.35;
     const px = ((frame * speed * dir + i * w * 0.28) % (w + 140) + (w + 140)) % (w + 140) - 70;
     const py = h * (0.2 + i * 0.16) + Math.sin(frame * 0.03 + i) * 14;
+    const wag = Math.sin(frame * 0.16 + i * 2.1) * 4.5; // 尾巴左右摆
     ctx.save();
     ctx.translate(px, py);
     ctx.scale(dir, 1);
@@ -407,7 +545,18 @@ const drawOceanBackground = (
     ctx.ellipse(0, 0, 14, 7, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.beginPath();
-    ctx.moveTo(-12, 0); ctx.lineTo(-22, -7); ctx.lineTo(-22, 7); ctx.closePath();
+    ctx.moveTo(-12, 0);
+    ctx.lineTo(-22, -7 + wag);
+    ctx.lineTo(-22, 7 + wag);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)'; // 眼睛
+    ctx.beginPath();
+    ctx.arc(7, -2, 2.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(20, 30, 45, 0.85)';
+    ctx.beginPath();
+    ctx.arc(7.8, -2, 1.2, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
@@ -823,7 +972,7 @@ const regenerateLayout = (m: MapType) => {
 };
 
 // 在“手部”原点处绘制角色持有的武器图标
-const drawHeldWeapon = (ctx: CanvasRenderingContext2D, weapon: WeaponType) => {
+const drawHeldWeapon = (ctx: CanvasRenderingContext2D, weapon: AnyWeaponId) => {
     if (weapon === 'sword') {
         ctx.fillStyle = '#ccc';
         ctx.fillRect(0, -25, 4, 30);
@@ -921,6 +1070,25 @@ const drawHeldWeapon = (ctx: CanvasRenderingContext2D, weapon: WeaponType) => {
         ctx.fillStyle = '#c9ff6b';
         ctx.font = '10px sans-serif';
         ctx.fillText('☠', -3, 4);
+    } else if (weapon === 'gatling') {
+        // 加特林（手持）：三联枪管 + 弹箱
+        ctx.fillStyle = '#3a3f44';
+        ctx.fillRect(-2, -7, 24, 11);       // 机匣
+        ctx.fillStyle = '#22262a';
+        ctx.fillRect(20, -6, 14, 2.5);      // 枪管 ×3
+        ctx.fillRect(20, -2, 14, 2.5);
+        ctx.fillRect(20, 2, 14, 2.5);
+        ctx.fillStyle = '#8a5a30';
+        ctx.fillRect(2, 4, 7, 7);           // 握把
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillRect(-8, -4, 7, 9);         // 弹箱
+    } else {
+        // 自创武器：手持它的 emoji
+        const cw = getCustom(weapon);
+        if (cw) {
+            ctx.font = '18px serif';
+            ctx.fillText(cw.emoji, 0, 6);
+        }
     }
 };
 
@@ -1169,95 +1337,145 @@ const drawObstacles = (
     });
 };
 
+/*
+  === 火柴人装配（动作流畅化重写） ===
+  以前的画法：腿是两条无膝单线段、手臂只画一条、走路时脚贴地平移（walkCycle 只改脚的 x），
+  躯干是根刚性竖线 —— 所以怎么看怎么僵。
+  现在的结构（全部朝右画，靠 scale(-1,1) 翻转）：
+  - 造型：腿长身子短（腿占身高近一半）、头是实心圆无眼睛、四肢同色无明暗。
+  - 腿：胯 → 膝 → 脚 两段式。步行时摆动腿前摆且脚抬起（max(0,cos) 弧线），支撑腿踩地。
+  - 臂：肩 → 肘 → 手 两段式，永远画两条，手上画小拳头。
+  - 躯干：平时笔直不勾腰（走/跑/跳都不前倾），只有出拳时前倾一点。
+  - 攻击：attackFrame 5→15 共 11 帧，前段手臂后拉蓄力，后段快速打直，躯干跟着前倾。
+*/
 const drawEntity = (ctx: CanvasRenderingContext2D, entity: Entity, frame: number) => {
     ctx.save();
-    
-    const centerX = entity.pos.x;
-    const centerY = entity.pos.y; // Feet position
+    ctx.translate(entity.pos.x, entity.pos.y); // pos.y 是脚底
 
-    ctx.translate(centerX, centerY);
-    
     if (entity.isDead) {
-         // 败者被击飞时持续翻滚，而非静态横躺
-         const tumble = frame * 0.12 * (entity.facingRight ? 1 : -1);
-         ctx.rotate(Math.PI / 2 * (entity.facingRight ? 1 : -1) + tumble);
+         // 败者静态平躺：固定转 90° 躺下即可，不翻滚
+         ctx.rotate(Math.PI / 2 * (entity.facingRight ? 1 : -1));
          ctx.translate(0, -10);
     }
 
     if (!entity.facingRight) ctx.scale(-1, 1);
-
     ctx.scale(1.3, 1.3); // 放大 1.3 倍
 
-    // Draw body
-    ctx.fillStyle = entity.color;
-    ctx.strokeStyle = entity.color;
     ctx.lineWidth = 4;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    const crouchOffset = entity.isCrouching ? 20 : 0;
-    
-    // Head
+    const H = entity.height;
+    const crouch = entity.isCrouching ? 16 : 0;
+
+    // ---- 运动状态 ----
+    const speedX = Math.abs(entity.vel.x);
+    const walking = speedX > 0.1 && entity.isGrounded && !entity.isCrouching;
+    const ph = frame / 6;                                            // 步行相位（沿用原节奏）
+    const bob = walking ? Math.abs(Math.cos(ph)) * 2.5               // 步行：随脚步交替上下颠
+                        : Math.sin(frame * 0.045) * 1;               // 站立：呼吸
+    // 出拳进度 0→1：attackFrame/15 从 0.33 起步，前段是蓄力（punch=0），后段打直（punch→1）
+    const punch = entity.isAttacking ? Math.min(1, Math.max(0, (entity.attackFrame / 15 - 0.4) / 0.6)) : 0;
+    // 躯干平时（走/跑/跳）保持笔直不勾腰，只有出拳时前倾一点制造冲击感
+    const leanAll = punch * 5 - (entity.isAttacking ? (1 - punch) * 2 : 0);
+
+    // ---- 骨架关键点（y 相对脚底，负值向上；x 正值朝前） ----
+    // 造型：腿长身子短——腿占身高近一半，躯干只留一小截
+    const hip = { x: 0, y: -42 + crouch * 0.75 + bob };
+    const neck = { x: leanAll, y: -H + 29 + crouch + bob };
+    const shoulder = { x: leanAll, y: -H + 37 + crouch + bob };
+    const head = { x: leanAll * 1.25, y: -H + 17 + crouch + bob };
+
+    // ---- 腿（胯→膝→脚）----
+    const legTargets: { fx: number; fy: number; bend: number }[] = (() => {
+        if (entity.isCrouching) return [{ fx: -13, fy: 0, bend: 10 }, { fx: 13, fy: 0, bend: 10 }];
+        if (!entity.isGrounded)  return [{ fx: -6, fy: -13, bend: 9 }, { fx: 9, fy: -9, bend: 8 }]; // 跳跃收腿
+        if (walking) return [0, 1].map(i => {
+            const t = ph + i * Math.PI;
+            return { fx: Math.sin(t) * 11, fy: -Math.max(0, Math.cos(t)) * 6, bend: 5 };
+        });
+        return [{ fx: -9, fy: 0, bend: 2.5 }, { fx: 9, fy: 0, bend: 2.5 }];
+    })();
+
+    const drawLeg = (t: { fx: number; fy: number; bend: number }) => {
+        const knee = { x: (hip.x + t.fx) / 2 + t.bend, y: (hip.y + t.fy) / 2 };
+        ctx.strokeStyle = entity.color;
+        ctx.beginPath();
+        ctx.moveTo(hip.x, hip.y);
+        ctx.lineTo(knee.x, knee.y);
+        ctx.lineTo(t.fx, t.fy);
+        ctx.stroke();
+    };
+    drawLeg(legTargets[0]);   // 远侧腿先画
+
+    // ---- 手臂目标姿势（hx/hy 都是相对肩部的偏移）----
+    const armTargets: { hx: number; hy: number; bend: number }[] = (() => {
+        if (entity.isWinner) { // 胜利：双臂上举摇摆
+            const wave = Math.sin(frame / 5) * 6;
+            const pump = Math.max(0, Math.sin(frame / 6)) * 12;
+            return [{ hx: -18 + wave, hy: -28 - pump, bend: 4 }, { hx: 18 + wave, hy: -30 - pump, bend: 3 }];
+        }
+        if (entity.heldWeapon) {
+            if (entity.isAttacking) { // 持械挥击：前臂带武器向下劈
+                return [{ hx: -8, hy: 16, bend: 4 }, { hx: 16 + punch * 10, hy: -10 + punch * 22, bend: 4 * (1 - punch) }];
+            }
+            return [{ hx: -8, hy: 17, bend: 4 }, { hx: 15, hy: 5, bend: 4 }]; // 持械戒备
+        }
+        if (entity.isAttacking) { // 空手出拳：蓄力后拉 → 快速打直
+            return [{ hx: -7 - punch * 3, hy: 16, bend: 4 }, { hx: -10 + punch * 44, hy: 4 - punch * 6, bend: 6 * (1 - punch) }];
+        }
+        if (!entity.isGrounded) { // 跳跃：双臂微张
+            return [{ hx: -13, hy: 12, bend: 5 }, { hx: 14, hy: 10, bend: 5 }];
+        }
+        if (walking) { // 与腿反相摆臂
+            const s = Math.sin(ph) * 9;
+            return [{ hx: -2 + s, hy: 16, bend: 3 }, { hx: 2 - s, hy: 16, bend: 3 }];
+        }
+        const sway = Math.sin(frame * 0.045) * 1.5; // 站立：随呼吸轻摆
+        return [{ hx: -7, hy: 19 + sway, bend: 3 }, { hx: 7, hy: 19 - sway, bend: 3 }];
+    })();
+
+    // 返回手的位置（持武器要把武器画在手上）
+    const drawArm = (t: { hx: number; hy: number; bend: number }) => {
+        const hand = { x: shoulder.x + t.hx, y: shoulder.y + t.hy };
+        const elbow = { x: (shoulder.x + hand.x) / 2 - t.bend, y: (shoulder.y + hand.y) / 2 + 2 }; // 肘朝后弯
+        ctx.strokeStyle = entity.color;
+        ctx.beginPath();
+        ctx.moveTo(shoulder.x, shoulder.y);
+        ctx.lineTo(elbow.x, elbow.y);
+        ctx.lineTo(hand.x, hand.y);
+        ctx.stroke();
+        ctx.fillStyle = ctx.strokeStyle; // 小拳头
+        ctx.beginPath();
+        ctx.arc(hand.x, hand.y, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+        return hand;
+    };
+
+    drawArm(armTargets[0]);          // 远侧臂：藏在躯干后面
+    drawLeg(legTargets[1]);          // 近侧腿
+
+    // ---- 躯干 ----
+    ctx.strokeStyle = entity.color;
     ctx.beginPath();
-    ctx.arc(0, -entity.height + 20 + crouchOffset, 12, 0, Math.PI * 2);
+    ctx.moveTo(hip.x, hip.y);
+    ctx.lineTo(neck.x, neck.y);
+    ctx.stroke();
+
+    // ---- 头（实心圆，不画眼睛）----
+    ctx.fillStyle = entity.color;
+    ctx.beginPath();
+    ctx.arc(head.x, head.y, 12, 0, Math.PI * 2);
     ctx.fill();
 
-    // Body
-    ctx.beginPath();
-    ctx.moveTo(0, -entity.height + 32 + crouchOffset);
-    ctx.lineTo(0, -25 + crouchOffset);
-    ctx.stroke();
-
-    // Legs
-    ctx.beginPath();
-    ctx.moveTo(0, -25 + crouchOffset);
-    if (entity.isCrouching) {
-        ctx.lineTo(-15, -5);
-        ctx.moveTo(0, -25 + crouchOffset);
-        ctx.lineTo(15, -5);
-    } else if (Math.abs(entity.vel.x) > 0.1 && entity.isGrounded) {
-        const walkCycle = Math.sin(frame / 6) * 10;
-        ctx.lineTo(-10 + walkCycle, 0);
-        ctx.moveTo(0, -25 + crouchOffset);
-        ctx.lineTo(10 - walkCycle, 0);
-    } else {
-        ctx.lineTo(-10, 0);
-        ctx.moveTo(0, -25 + crouchOffset);
-        ctx.lineTo(10, 0);
-    }
-    ctx.stroke();
-
-    // Arms
-    ctx.beginPath();
-    const shoulderY = -entity.height + 40 + crouchOffset;
-    ctx.moveTo(0, shoulderY);
-
-    if (entity.isWinner) {
-        const wave = Math.sin(frame / 5) * 6;               // 双臂左右摇摆
-        const pump = Math.max(0, Math.sin(frame / 6)) * 12; // 双臂上下挥动
-        ctx.lineTo(-20 + wave, shoulderY - 30 - pump);
-        ctx.moveTo(0, shoulderY);
-        ctx.lineTo(20 + wave, shoulderY - 30 - pump);
-    } else if (entity.isAttacking) {
-        const attackProgress = entity.attackFrame / 15;
-        ctx.lineTo(25, shoulderY - 10 + attackProgress * 20);
-    } else if (entity.heldWeapon) {
-        ctx.lineTo(15, shoulderY + 5);
-        
+    // ---- 近侧臂（最后画，持武器时武器跟手）----
+    const frontHand = drawArm(armTargets[1]);
+    if (entity.heldWeapon) {
         ctx.save();
-        ctx.translate(15, shoulderY + 5);
+        ctx.translate(frontHand.x, frontHand.y);
         drawHeldWeapon(ctx, entity.heldWeapon);
         ctx.restore();
-
-    } else {
-        if (Math.abs(entity.vel.x) > 0.1) {
-             const armCycle = Math.cos(frame / 6) * 10;
-             ctx.lineTo(armCycle, shoulderY + 15);
-        } else {
-             ctx.lineTo(0, shoulderY + 20);
-        }
     }
-    ctx.stroke();
 
     ctx.restore();
 };
@@ -1303,7 +1521,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
     newEntities.push({
       id: 'p1', type: 'player', playerIndex: 0,
       pos: { x: 100, y: 100 }, vel: { x: 0, y: 0 }, 
-      width: 52, height: 91, color: '#3b82f6', 
+      width: 52, height: 91, color: '#1677ff',
       isGrounded: false, isCrouching: false, health: 100, maxHealth: 100, isDead: false,
       facingRight: true, attackCooldown: 0, isAttacking: false, attackFrame: 0,
       heldWeapon: null, ammo: 0, weaponDuration: 0, stunFrames: 0, spikeCooldown: 0
@@ -1545,20 +1763,24 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
   };
 
   const spawnFallingItem = (canvasWidth: number) => {
-      let type: WeaponType;
-      
+      let type: AnyWeaponId;
+
       const count = spawnedWeaponCountRef.current;
-      
-      if (count === atomBombIndexRef.current) {
+
+      // 稀有槽位也要过武器库的禁用开关：被禁用就退化成普通掉落
+      if (count === atomBombIndexRef.current && !isBuiltinDisabled('atom_bomb')) {
           type = 'atom_bomb';
-      } else if (count === missileIndexRef.current) {
+      } else if (count === missileIndexRef.current && !isBuiltinDisabled('missile')) {
           type = 'missile';
-      } else if (count === dragonIndexRef.current) {
+      } else if (count === dragonIndexRef.current && !isBuiltinDisabled('dragon')) {
           type = 'dragon';
       } else {
-          // 移除 pistol, 加入 pokemon, bomber, laser, zeperion
-          const normalPool: WeaponType[] = ['bomb', 'sword', 'bomber', 'pokemon', 'laser', 'zeperion', 'c4', 'piercer', 'aug', 'gas'];
-          type = normalPool[Math.floor(Math.random() * normalPool.length)];
+          // 普通池从武器库存档取：被禁用的内置武器剔除，小朋友的自创武器进池
+          const normalPool = getDropPool();
+          // 全部禁用且没有自创武器时兜底：至少让长剑能掉，不然天上什么都不掉了
+          type = normalPool.length > 0
+              ? normalPool[Math.floor(Math.random() * normalPool.length)]
+              : 'sword';
       }
       
       fallingItemsRef.current.push({
@@ -1576,7 +1798,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    // 时间轴与衰减始终推进：菜单界面的背景动画（星空闪烁 / 流星 / 落叶）也要动
+    // 时间轴与衰减始终推进：菜单界面的背景动画（星空闪烁 / 楼顶信号灯 / 落叶）也要动
     frameRef.current++;
     if (shakeRef.current > 0) shakeRef.current--;
     if (flashRef.current > 0) flashRef.current -= 0.02;
@@ -2167,6 +2389,44 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
             return;
         }
 
+        // --- 加特林 & 自创枪械弹道：同 AUG 的直线单发弹，伤害/颜色取自各自参数 ---
+        if (proj.type === 'gatling' || (isCustomId(proj.type) && proj.blastRadius === undefined)) {
+            if (!proj.trail) proj.trail = [];
+            proj.trail.push({ ...proj.pos });
+            if (proj.trail.length > 12) proj.trail.shift();
+
+            proj.pos.x += proj.vel.x;
+            proj.pos.y += proj.vel.y;
+
+            if (proj.pos.x < -50 || proj.pos.x > canvas.width + 50 || proj.pos.y < -50 || proj.pos.y > canvas.height + 50) {
+                proj.active = false;
+            }
+
+            const bulletDmg = proj.type === 'gatling' ? 4 : (proj.damage ?? 6);
+            const tint = proj.tint ?? '#ffd23a';
+
+            entitiesRef.current.forEach(target => {
+                if (target.id === proj.ownerId || target.isDead || !proj.active) return;
+                if (Math.abs(proj.pos.x - target.pos.x) < 20 &&
+                    proj.pos.y > target.pos.y - 75 && proj.pos.y < target.pos.y + 10) {
+                    proj.active = false;
+                    target.health -= bulletDmg;
+                    target.stunFrames = 6;
+                    target.vel.x += proj.vel.x > 0 ? 3 : -3;
+                    playHitSound();
+                    spawnParticles(proj.pos.x, proj.pos.y, tint, 6, 6);
+                    shakeRef.current = 2;
+                    if (target.health <= 0) {
+                        target.health = 0;
+                        target.isDead = true;
+                        target.isLoser = true;
+                        triggerWin(proj.ownerId);
+                    }
+                }
+            });
+            return;
+        }
+
         // --- 巡航导弹逻辑 (东风) ---
         if (proj.type === 'missile') {
             if (!proj.trail) proj.trail = [];
@@ -2313,6 +2573,51 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                     });
                 }
             }
+        } else if (isCustomId(proj.type)) {
+            // --- 自创·投掷爆炸：仿 bomb 的重力弧线，落地/上台后按存档参数开花 ---
+            proj.vel.y += GRAVITY;
+            let hitGround = false;
+            if (proj.pos.y >= GROUND_Y) { hitGround = true; }
+            else if (proj.vel.y > 0) {
+                platforms.forEach(plat => {
+                    if (proj.pos.x > plat.x && proj.pos.x < plat.x + plat.width &&
+                        proj.pos.y >= plat.y && proj.pos.y <= plat.y + 20) {
+                        hitGround = true;
+                    }
+                });
+            }
+
+            if (hitGround) {
+                proj.active = false;
+                const radius = proj.blastRadius ?? 80;
+                const dmg = proj.damage ?? 20;
+                const tint = proj.tint ?? '#ff4500';
+                shakeRef.current = 20;
+                playExplodeSound();
+                spawnParticles(proj.pos.x, proj.pos.y, tint, 30, 12, 2);
+                spawnShockwave(proj.pos.x, proj.pos.y, tint, radius / 120);
+                spawnExplosionCloud(proj.pos.x, proj.pos.y - 10, radius / 150);
+
+                entitiesRef.current.forEach(target => {
+                    if (!target.isDead) {
+                        const dist = Math.sqrt(Math.pow(target.pos.x - proj.pos.x, 2) + Math.pow(target.pos.y - proj.pos.y, 2));
+                        if (dist < radius + 30) {
+                            target.health -= dmg;
+                            if (target.health <= 0) { target.health = 0; target.isDead = true; target.isLoser = true; }
+
+                            const angle = Math.atan2(target.pos.y - proj.pos.y, target.pos.x - proj.pos.x);
+                            target.vel.x = Math.cos(angle) * 24;
+                            target.vel.y = Math.sin(angle) * 24 - 6;
+                            target.stunFrames = 25;
+
+                            if (target.isDead) {
+                                const winner = entitiesRef.current.find(e => e.id === proj.ownerId);
+                                if (winner) triggerWin(winner.id);
+                            }
+                        }
+                    }
+                });
+            }
         } else {
             // === 碰撞逻辑 (子弹 & 导弹) ===
             const isMissile = proj.type === 'missile';
@@ -2456,6 +2761,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                     case 'piercer': entity.ammo = 3; break; // 穿地弹 3 发
                     case 'aug': entity.ammo = 20; break; // AUG 20 发
                     case 'gas': entity.ammo = 2; break; // 毒气弹 2 发
+                    case 'gatling': entity.ammo = 40; break; // 加特林 40 发：单发刮痧，胜在泼洒
+                    default: {
+                        // 自创武器：弹药量来自武器库存档
+                        const cw = getCustom(item.type);
+                        if (cw) entity.ammo = cw.ammo;
+                    }
                 }
                 fallingItemsRef.current.splice(itemIndex, 1);
                 playJumpSound();
@@ -2656,7 +2967,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                 if (entity.heldWeapon === 'c4') attackRange = 300;
                 if (entity.heldWeapon === 'piercer') attackRange = 700;
                 if (entity.heldWeapon === 'aug') attackRange = 900;
+                if (entity.heldWeapon === 'gatling') attackRange = 900;
                 if (entity.heldWeapon === 'gas') attackRange = 600;
+                // 自创武器：近战用自己的 range，枪/投掷按远程处理
+                const aiCustom = getCustom(entity.heldWeapon);
+                if (aiCustom) attackRange = aiCustom.template === 'melee' ? aiCustom.range : 700;
 
                 if (absDistX < attackRange && Math.abs(p1.pos.y - entity.pos.y) < 100) {
                     if (entity.attackCooldown === 0 && Math.random() < 0.05) attack = true;
@@ -2680,6 +2995,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           entity.attackCooldown = ATTACK_COOLDOWN;
           entity.isAttacking = true;
           entity.attackFrame = 5;
+
+          // 自创武器（武器库）：查一次存档，下面按模板分发
+          const customW = getCustom(entity.heldWeapon);
 
           if (entity.heldWeapon === 'bomb') {
               entity.vel.x += entity.facingRight ? -2 : 2;
@@ -2918,10 +3236,65 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                   gasRadius: 0
               });
               entity.ammo--;
+          } else if (entity.heldWeapon === 'gatling') {
+              // == 加特林：射速是 AUG 的两倍，弹道带轻微散射，单发伤害低 ==
+              playShootSound();
+              entity.attackCooldown = 4;
+              entity.vel.x += entity.facingRight ? -2 : 2; // 后坐力比 AUG 小（单手压得住）
+              const mx = entity.pos.x + (entity.facingRight ? 34 : -34);
+              const my = entity.pos.y - 42;
+              projectilesRef.current.push({
+                  id: Math.random().toString(),
+                  type: 'gatling',
+                  pos: { x: mx, y: my },
+                  vel: { x: entity.facingRight ? 20 : -20, y: (Math.random() - 0.5) * 2.4 }, // 散射
+                  ownerId: entity.id,
+                  width: 4, height: 3, active: true,
+                  trail: []
+              });
+              spawnParticles(mx, my, '#ffd23a', 3, 3, 0.3, 2); // 枪口火光
+              entity.ammo--;
+          } else if (customW && customW.template === 'gun') {
+              // == 自创·子弹连发：仿 AUG 直弹，弹速/伤害/颜色来自武器库参数 ==
+              playShootSound();
+              entity.attackCooldown = 8;
+              entity.vel.x += entity.facingRight ? -3 : 3;
+              const mx = entity.pos.x + (entity.facingRight ? 30 : -30);
+              const my = entity.pos.y - 42;
+              projectilesRef.current.push({
+                  id: Math.random().toString(),
+                  type: customW.id,
+                  pos: { x: mx, y: my },
+                  vel: { x: entity.facingRight ? customW.bulletSpeed : -customW.bulletSpeed, y: 0 },
+                  ownerId: entity.id,
+                  width: 6, height: 5, active: true,
+                  customId: customW.id,
+                  damage: customW.damage,
+                  tint: customW.color,
+                  trail: []
+              });
+              spawnParticles(mx, my, customW.color, 3, 3, 0.3, 2);
+              entity.ammo--;
+          } else if (customW && customW.template === 'throw') {
+              // == 自创·投掷爆炸：仿 bomb 弧线，伤害/半径/颜色来自武器库参数 ==
+              entity.vel.x += entity.facingRight ? -2 : 2;
+              projectilesRef.current.push({
+                  id: Math.random().toString(),
+                  type: customW.id,
+                  pos: { x: entity.pos.x, y: entity.pos.y - 60 },
+                  vel: { x: entity.facingRight ? 12 : -12, y: -12 },
+                  ownerId: entity.id,
+                  width: 22, height: 22, active: true,
+                  customId: customW.id,
+                  damage: customW.damage,
+                  blastRadius: customW.blastRadius,
+                  tint: customW.color
+              });
+              entity.ammo--;
           } else {
               // == 近战武器 ==
               playAttackSound();
-              
+
               let range = ATTACK_RANGE;
               let dmg = ATTACK_DAMAGE;
               let knockbackX = 15;
@@ -2930,7 +3303,16 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
               let hitEffectSize = 12;
 
               if (entity.heldWeapon === 'sword') {
-                  range = 140; dmg = 15; knockbackX = 12; selfPush = 12; entity.attackCooldown = 20; 
+                  range = 140; dmg = 15; knockbackX = 12; selfPush = 12; entity.attackCooldown = 20;
+              }
+              // 自创·近战挥砍：复用整套近战判定，只换数值
+              if (customW && customW.template === 'melee') {
+                  range = customW.range;
+                  dmg = customW.damage;
+                  knockbackX = customW.knockback;
+                  knockbackY = -Math.max(2, customW.knockback * 0.5);
+                  selfPush = 12;
+                  entity.attackCooldown = 20;
               }
 
               entity.vel.x = entity.facingRight ? selfPush : -selfPush;
@@ -3081,7 +3463,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
       } else if (map === 'volcano') {
           drawVolcanoBackground(ctx, canvas.width, canvas.height, frameRef.current);
       } else {
-          drawDynamicBackground(ctx, canvas.width, canvas.height, frameRef.current);
+          drawNeonBackground(ctx, canvas.width, canvas.height, frameRef.current);
       }
 
       ctx.translate(shakeX, shakeY);
@@ -3309,6 +3691,19 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
              ctx.fillStyle = '#3f7d2f'; ctx.fillRect(-7, -7, 14, 14);
              ctx.fillStyle = '#2f5d22'; ctx.fillRect(-7, -7, 14, 4);
              ctx.fillStyle = '#c9ff6b'; ctx.font = '10px sans-serif'; ctx.fillText('☠', -4, 5);
+        } else if (item.type === 'gatling') {
+             // 加特林图标：三联枪管 + 弹箱
+             ctx.fillStyle = '#3a3f44'; ctx.fillRect(-12, -6, 24, 10);
+             ctx.fillStyle = '#22262a';
+             ctx.fillRect(12, -5, 14, 2.5);
+             ctx.fillRect(12, -1.5, 14, 2.5);
+             ctx.fillRect(12, 2, 14, 2.5);
+             ctx.fillStyle = '#8a5a30'; ctx.fillRect(-14, -4, 4, 8);   // 枪托
+             ctx.fillStyle = '#fbbf24'; ctx.fillRect(-12, 4, 10, 6);  // 弹箱
+        } else {
+             // 自创武器：天上掉下来就是它的 emoji
+             const cw = getCustom(item.type);
+             if (cw) { ctx.font = '22px serif'; ctx.fillText(cw.emoji, -11, 8); }
         }
         ctx.restore();
       });
@@ -3462,10 +3857,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                return;
            }
 
-           if (proj.type === 'aug') {
-               // 弹道拖尾
+           if (proj.type === 'aug' || proj.type === 'gatling' || (isCustomId(proj.type) && proj.blastRadius === undefined)) {
+               // 直线弹（AUG / 加特林 / 自创枪械）：弹道拖尾 + 同心圆弹头（不用 shadowBlur）
+               const tint = proj.tint ?? (proj.type === 'gatling' ? '#ffd23a' : '#ffe28a');
                if (proj.trail && proj.trail.length > 1) {
-                   ctx.strokeStyle = 'rgba(255, 230, 150, 0.6)';
+                   ctx.globalAlpha = 0.55;
+                   ctx.strokeStyle = tint;
                    ctx.lineWidth = 2;
                    ctx.beginPath();
                    ctx.moveTo(proj.trail[0].x, proj.trail[0].y);
@@ -3473,12 +3870,14 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                        ctx.lineTo(proj.trail[i].x, proj.trail[i].y);
                    }
                    ctx.stroke();
+                   ctx.globalAlpha = 1;
                }
-               // 弹头光点：同心圆代替 shadowBlur（同一帧可能有好几发在飞）
-               ctx.fillStyle = 'rgba(255, 226, 138, 0.35)';
+               ctx.globalAlpha = 0.35;
+               ctx.fillStyle = tint;
                ctx.beginPath();
                ctx.arc(proj.pos.x, proj.pos.y, 6, 0, Math.PI * 2);
                ctx.fill();
+               ctx.globalAlpha = 1;
                ctx.fillStyle = '#fff7cc';
                ctx.beginPath();
                ctx.arc(proj.pos.x, proj.pos.y, 2.5, 0, Math.PI * 2);
@@ -3548,6 +3947,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                    ctx.fillStyle = '#ff0000';
                }
                ctx.beginPath(); ctx.arc(5, 5, 2, 0, Math.PI * 2); ctx.fill();
+           } else if (isCustomId(proj.type)) {
+               // 自创·投掷武器：一路翻滚的 emoji（枪类投射物在上面提前 return 了，到这里的只会是投掷）
+               ctx.rotate(frameRef.current * 0.25);
+               ctx.font = '18px serif';
+               ctx.fillText(getCustom(proj.type)?.emoji ?? '💥', -9, 6);
            }
 
            ctx.restore();

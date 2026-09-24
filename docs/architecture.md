@@ -20,7 +20,7 @@ MainMenu 是**三栏布局**：游戏模式居左、选择地图居中、操作�
 - **Ref 驱动而非 State**：游戏世界（entities / particles / projectiles / fallingItems）全部存于 `useRef`，React state 只用于向 UI 层同步（`setPlayers` / `setStats` / `setGameState`）。不要在每帧 setState。
 - **主循环**：`tick()` → `requestAnimationFrame`，每帧先 `update()`（物理/输入/AI/投射物/碰撞）再 `draw()`（背景 → 平台 → 地面 → 障碍 → 投射物 → 实体 → 粒子）。
 - **固定步长**：逻辑固定 60Hz，`tick()` 用时间累积器（`lastTimeRef` / `accRef`）决定这一帧要跑几步 `update()`，单帧最多 `MAX_STEPS_PER_FRAME` 步，超过就丢弃积压。**物理常量（`GRAVITY` / `MOVE_SPEED` / 各种 `*_COOLDOWN`）都是"每逻辑帧"的量，新增时必须按 60Hz 来定**，不要再按显示器刷新率推算。没有推进逻辑帧时直接跳过 `draw()`（高刷屏上很常见），省掉整帧光栅化。
-- **帧计数** `frameRef` 是全局时间轴，所有动画/冷却/武器生命周期都以"帧"为单位。它在 `update()` 开头自增，**早于 PLAYING 状态的早退分支**，这样菜单界面的背景动画（星空 / 流星 / 落叶）也会动。
+- **帧计数** `frameRef` 是全局时间轴，所有动画/冷却/武器生命周期都以"帧"为单位。它在 `update()` 开头自增，**早于 PLAYING 状态的早退分支**，这样菜单界面的背景动画（星空 / 楼顶信号灯 / 落叶）也会动。
 - **HUD 同步**：每 5 帧算一次 `hudSignature()`（玩家身上所有可见字段拼成的字符串），只有签名变了才 `setStats` / `setPlayers`。角色站着不动时 React 完全不参与。**新增 HUD 字段时记得加进签名**，否则界面不会更新。
 - **坐标系**：`pos.y` 是**脚底**位置（y 向下为正），命中判定、平台碰撞都以脚底为基准——画错方向会"头插地里"。
 - **世界尺寸自适应**：关卡坐标以 `BASE_W = 1280` × `BASE_GROUND_Y = 600` 为基准设计；每帧 `tick()` 开头的 `syncWorldSize(canvas)` 会按窗口高度调整 `GROUND_Y`（`min(600, max(280, 画布高 - 90))`），`getPlatforms(map, canvasWidth)` 再按 `GROUND_Y` 与画布宽度等比缩放平台（结果按尺寸缓存）。**新增平台 / 硬编码地面高度时不要直接写 600**，要用 `GROUND_Y` 或基准坐标，否则小窗口下角色会掉出屏幕。

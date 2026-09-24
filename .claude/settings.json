@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(yarn lint *)",
+      "Bash(\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" --headless=new --remote-debugging-port=9333 --window-size=1280,720 --hide-scrollbars --user-data-dir=/tmp/chrome-cdp about:blank)",
+      "Bash(curl -s -m 3 http://localhost:9333/json/version)"
+    ]
+  }
+}

@@ -1,5 +1,6 @@
 import React from 'react';
-import { Entity, GameStats, WeaponType } from '../types';
+import { Entity, GameStats } from '../types';
+import { weaponEmoji, weaponName } from '../services/weaponService';
 
 interface GameUIProps {
   stats: GameStats;
@@ -16,43 +17,10 @@ const WEAPON_LIFETIME_FRAMES = 15 * 60;
   2. 血条用 transform: scaleX() 而非 width —— transform 不触发 layout / paint；
   3. 组件用 React.memo 包裹，配合 GameCanvas 的"值没变就不 setState"，避免无谓重渲染。
 */
-const getWeaponIcon = (type: WeaponType | null | undefined) => {
-    switch(type) {
-        case 'sword': return '⚔️';
-        case 'bomb': return '💣';
-        case 'atom_bomb': return '☢️';
-        case 'missile': return '🚀';
-        case 'dragon': return '🐉';
-        case 'bomber': return '🛩️';
-        case 'pokemon': return '⚡';
-        case 'laser': return '🚨';
-        case 'zeperion': return '✨';
-        case 'c4': return '🧨';
-        case 'piercer': return '🕳️';
-        case 'aug': return '🔫';
-        case 'gas': return '☠️';
-        default: return '👊';
-    }
-};
-
-const getWeaponName = (type: WeaponType | null | undefined) => {
-    switch(type) {
-        case 'sword': return '长剑';
-        case 'bomb': return '炸弹';
-        case 'atom_bomb': return '原子弹';
-        case 'missile': return '巡航导弹';
-        case 'dragon': return '神龙';
-        case 'bomber': return '轰炸机';
-        case 'pokemon': return '皮卡丘';
-        case 'laser': return '激光枪';
-        case 'zeperion': return '哉佩利敖';
-        case 'c4': return 'C4 炸药';
-        case 'piercer': return '穿地弹';
-        case 'aug': return 'AUG 步枪';
-        case 'gas': return '毒气弹';
-        default: return '赤手空拳';
-    }
-};
+// 图标与名字统一查武器库存档的元数据表（内置 14 种 + 小朋友的自创武器），
+// 不在这里另维护一份 switch，不然加武器要改两个地方
+const getWeaponIcon = (type: Entity['heldWeapon']) => weaponEmoji(type);
+const getWeaponName = (type: Entity['heldWeapon']) => weaponName(type);
 
 const FighterHUD: React.FC<{ player: Entity; align: 'left' | 'right' }> = ({ player, align }) => {
   if (!player) return null;

@@ -14,8 +14,38 @@ export interface Vector {
   y: number;
 }
 
-// 移除了 stick, blade, pistol，新增 bomber, pokemon, zeperion
-export type WeaponType = 'bomb' | 'sword' | 'atom_bomb' | 'missile' | 'dragon' | 'bomber' | 'pokemon' | 'laser' | 'zeperion' | 'c4' | 'piercer' | 'aug' | 'gas';
+// 移除了 stick, blade, pistol，新增 bomber, pokemon, zeperion, gatling
+export type WeaponType = 'bomb' | 'sword' | 'atom_bomb' | 'missile' | 'dragon' | 'bomber' | 'pokemon' | 'laser' | 'zeperion' | 'c4' | 'piercer' | 'aug' | 'gas' | 'gatling';
+
+/*
+  武器库（WeaponArsenal）里小朋友自创的武器。
+  行为不能靠 UI 生成代码，所以自创武器 = 行为模板 + 参数：
+  - melee：近战挥砍（复用近战判定块，range/damage/knockback 可调）
+  - gun：  子弹连发（仿 aug 直弹，bulletSpeed/damage/tint 可调）
+  - throw：投掷爆炸（仿 bomb 弧线+爆炸，blastRadius/damage/tint 可调）
+  数据存 localStorage（见 services/weaponService.ts），跨版本保留。
+*/
+export type CustomWeaponTemplate = 'melee' | 'gun' | 'throw';
+
+export interface CustomWeapon {
+  id: CustomWeaponId;       // 'cw_' 前缀
+  name: string;             // ≤ 6 字
+  emoji: string;            // 手持贴图 / 落物贴图 / HUD 图标都是它
+  template: CustomWeaponTemplate;
+  damage: number;           //  melee/gun/throw 共用
+  ammo: number;             // 使用次数
+  range: number;            // melee 专用：攻击距离
+  knockback: number;        // melee 专用：击退
+  bulletSpeed: number;      // gun 专用：弹速 px/帧
+  blastRadius: number;      // throw 专用：爆炸半径
+  color: string;            // gun 子弹 / throw 爆炸的粒子颜色（#rrggbb）
+}
+
+// 自创武器 id：'cw_' 前缀的字符串（如 cw_1719123456789）
+export type CustomWeaponId = `cw_${string}`;
+
+// 任何能拿在手上的武器：内置 13 种 + 自创
+export type AnyWeaponId = WeaponType | CustomWeaponId;
 
 export interface Platform {
   x: number;
@@ -64,7 +94,7 @@ export interface Entity {
   playerIndex: number; 
   isWinner?: boolean;
   isLoser?: boolean;
-  heldWeapon?: WeaponType | null;
+  heldWeapon?: AnyWeaponId | null;
   ammo: number; // 弹药量 或 近战武器耐久度
   weaponDuration: number; // 新增：武器剩余存在时间 (帧)
   stunFrames: number; // 受击硬直/击飞状态
@@ -73,7 +103,7 @@ export interface Entity {
 
 export interface FallingItem {
   id: string;
-  type: WeaponType;
+  type: AnyWeaponId;
   pos: Vector;
   vel: Vector;
   width: number;
@@ -83,7 +113,7 @@ export interface FallingItem {
 
 export interface Projectile {
   id: string;
-  type: WeaponType;
+  type: AnyWeaponId;
   pos: Vector;
   vel: Vector;
   ownerId: string;
@@ -91,7 +121,13 @@ export interface Projectile {
   height: number;
   active: boolean;
   targetId?: string; // 追踪目标ID
-  
+
+  // 自创武器（武器库）投射物：参数挂在弹上，update/draw 直接读，不用回查存档
+  customId?: CustomWeaponId;
+  damage?: number;
+  blastRadius?: number;
+  tint?: string;
+
   // 神龙特有属性
   dragonState?: 'enter' | 'hunt';
   dragonPathProgress?: number; // 入场动画进度

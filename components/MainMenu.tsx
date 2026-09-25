@@ -24,6 +24,7 @@ const MAPS: { id: MapType; name: string; icon: string; active: string; ring: str
   { id: 'ocean', name: '海洋', icon: '🌊', active: 'from-cyan-500 to-sky-500 shadow-cyan-700', ring: 'border-cyan-200' },
   { id: 'volcano', name: '火山', icon: '🌋', active: 'from-red-500 to-rose-500 shadow-red-700', ring: 'border-rose-200' },
   { id: 'night', name: '黑夜', icon: '🌙', active: 'from-indigo-500 to-violet-600 shadow-indigo-700', ring: 'border-indigo-200' },
+  { id: 'snow', name: '雪原', icon: '❄️', active: 'from-sky-400 to-cyan-400 shadow-sky-700', ring: 'border-sky-200' },
 ];
 
 // 首页天空装饰配置：云朵都从右往左慢慢飘（负 delay 让打开页面时它们已经散开），

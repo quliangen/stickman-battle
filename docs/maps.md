@@ -2,12 +2,12 @@
 
 ## 总览
 
-6 张地图（`MapType`）：`neon`（霓虹都市/星空+城市天际线）、`forest`（森林）、`desert`（沙漠）、`ocean`（海洋）、`volcano`（火山）、`night`（黑夜/星空+月亮+萤火虫+夜色草地）。
+7 张地图（`MapType`）：`neon`（霓虹都市/星空+城市天际线）、`forest`（森林）、`desert`（沙漠）、`ocean`（海洋）、`volcano`（火山）、`night`（黑夜/星空+月亮+萤火虫+夜色草地）、`snow`（雪原/淡日+雪山+雪松+飘雪）。
 
 每张地图由两部分组成：
 
 1. **平台数组常量**：`NEON_PLATFORMS` / `FOREST_PLATFORMS` / ... （[GameCanvas.tsx:521](../components/GameCanvas.tsx#L521)），类型为 `Platform { x, y, width, height }`，通过 `getPlatforms(map, canvasWidth)` 选取。常量里的坐标是 **1280 × 600 基准坐标系**下的设计值，`getPlatforms` 会按当前画布宽高自动缩放（详见 [architecture.md](architecture.md) 的"世界尺寸自适应"）。
-2. **背景绘制函数**：`drawNeonBackground`（neon 星空 + 城市天际线）/ `drawForestBackground` / `drawDesertBackground` / `drawOceanBackground` / `drawVolcanoBackground` / `drawNightBackground`（黑夜），在 `draw()` 中按当前地图调用。
+2. **背景绘制函数**：`drawNeonBackground`（neon 星空 + 城市天际线）/ `drawForestBackground` / `drawDesertBackground` / `drawOceanBackground` / `drawVolcanoBackground` / `drawNightBackground`（黑夜）/ `drawSnowBackground`（雪原），在 `draw()` 中按当前地图调用。
 
 ## 每局随机地形
 
@@ -31,7 +31,7 @@
 
 ## 背景绘制约定
 
-- 静态装饰元素（星星、落叶、沙尘、气泡、火山灰）用 `mulberry32(seed)` 预生成数组，保证帧间一致；每张地图用不同的种子常量。
+- 静态装饰元素（星星、落叶、沙尘、气泡、火山灰、雪花）用 `mulberry32(seed)` 预生成数组，保证帧间一致；每张地图用不同的种子常量。
 - **大面积的静态装饰要画进离屏缓存**：霓虹都市的天际线（几百扇亮窗）由 `getCityLayer()` 画进离屏画布，每帧只 `drawImage` 一次，缓存键含画布宽与 `GROUND_Y`，尺寸变了自动重画。重画时楼的位置不能跟着变，所以楼的排布用固定种子 PRNG。若新增类似的密集静态装饰，沿用同一模式。
 - 动态元素（楼顶信号灯、光线、飘浮物）以 `frameRef` / 传入的 `frame` 为时间轴做周期运动。
 - 各地图平台的材质绘制集中在 `draw()` 的平台分支里，统一用 `roundRectPath()` 画圆角，霓虹 / 火山额外带辉光（`ctx.shadowBlur`）。

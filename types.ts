@@ -7,7 +7,7 @@ export enum GameState {
 
 export type GameMode = 'PVE' | 'PVP';
 
-export type MapType = 'neon' | 'forest' | 'desert' | 'ocean' | 'volcano' | 'night';
+export type MapType = 'neon' | 'forest' | 'desert' | 'ocean' | 'volcano' | 'night' | 'snow';
 
 export interface Vector {
   x: number;

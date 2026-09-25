@@ -749,21 +749,167 @@ const drawNightBackground = (
   ctx.closePath();
   ctx.fill();
 
-  // 5. 萤火虫：草地上一亮一灭地飘（亮的时候才画光晕）
-  NIGHT_FIREFLIES.forEach(f => {
-    const fx = f.x * w + Math.sin(frame * 0.01 + f.phase) * f.drift;
-    const fy = f.y * h + Math.cos(frame * 0.013 + f.phase * 1.7) * f.drift * 0.4;
-    const a = Math.max(0, Math.sin(frame * f.speed * 60 * 0.05 + f.phase));
-    if (a <= 0.05) return;
-    ctx.fillStyle = `rgba(214, 255, 138, ${0.7 * a})`;
+    // 5. 萤火虫：草地上一亮一灭地飘（亮的时候才画光晕）
+    NIGHT_FIREFLIES.forEach(f => {
+        const fx = f.x * w + Math.sin(frame * 0.01 + f.phase) * f.drift;
+        const fy = f.y * h + Math.cos(frame * 0.013 + f.phase * 1.7) * f.drift * 0.4;
+        const a = Math.max(0, Math.sin(frame * f.speed * 60 * 0.05 + f.phase));
+        if (a <= 0.05) return;
+        ctx.fillStyle = `rgba(214, 255, 138, ${0.7 * a})`;
+        ctx.beginPath();
+        ctx.arc(fx, fy, f.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = `rgba(190, 255, 120, ${0.16 * a})`;
+        ctx.beginPath();
+        ctx.arc(fx, fy, f.size * 3.2, 0, Math.PI * 2);
+        ctx.fill();
+    });
+};
+
+// ================= 雪原动态背景 =================
+// 同一套约定：静态元素（雪花）用固定种子 PRNG 预生成，帧间一致；
+// 动态效果（下雪、摇摆）以 frame 为时间轴。
+interface Snowflake {
+    x: number;
+    y: number;
+    size: number;
+    speed: number; // 下落速度
+    phase: number; // 左右摇摆相位
+    sway: number;  // 摇摆幅度
+}
+
+const SNOWFLAKES: Snowflake[] = (() => {
+    const rand = mulberry32(20261225);
+    return Array.from({ length: 80 }, () => ({
+        x: rand(),
+        y: rand(),
+        size: 1 + rand() * 2.6,
+        speed: 0.5 + rand() * 1.1,
+        phase: rand() * Math.PI * 2,
+        sway: 10 + rand() * 26,
+    }));
+})();
+
+// 山顶积雪：尖顶下沿画成锯齿，像被风刮过的雪线
+const drawSnowCap = (
+    ctx: CanvasRenderingContext2D,
+    px: number,
+    py: number,
+    s: number
+) => {
     ctx.beginPath();
-    ctx.arc(fx, fy, f.size, 0, Math.PI * 2);
+    ctx.moveTo(px - s, py + s * 1.1);
+    ctx.lineTo(px, py);
+    ctx.lineTo(px + s, py + s * 1.1);
+    ctx.lineTo(px + s * 0.4, py + s * 0.72);
+    ctx.lineTo(px, py + s * 0.95);
+    ctx.lineTo(px - s * 0.4, py + s * 0.72);
+    ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = `rgba(190, 255, 120, ${0.16 * a})`;
+};
+
+const drawSnowBackground = (
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    frame: number
+) => {
+    // 1. 冬日天空：淡蓝渐变到地平线近乎白色，冷但不压抑
+    const sky = ctx.createLinearGradient(0, 0, 0, h);
+    sky.addColorStop(0, '#6ba3d8');
+    sky.addColorStop(0.55, '#a9cdec');
+    sky.addColorStop(1, '#e8f3fc');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, h);
+
+    // 2. 冬日低阳：雪天的太阳白白淡淡，光晕比本体显眼
+    const sunX = w * 0.76;
+    const sunY = h * 0.18;
+    const sunR = Math.min(w, h) * 0.055;
+    ctx.globalCompositeOperation = 'screen';
+    const halo = ctx.createRadialGradient(sunX, sunY, sunR * 0.3, sunX, sunY, sunR * 5);
+    halo.addColorStop(0, 'rgba(255, 246, 220, 0.5)');
+    halo.addColorStop(1, 'rgba(255, 246, 220, 0)');
+    ctx.fillStyle = halo;
+    ctx.fillRect(0, 0, w, h);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#fff7e0';
     ctx.beginPath();
-    ctx.arc(fx, fy, f.size * 3.2, 0, Math.PI * 2);
+    ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
     ctx.fill();
-  });
+
+    // 3. 雪山：远浅近深两层，各自点几笔雪顶
+    ctx.fillStyle = 'rgba(205, 226, 244, 0.95)';
+    ctx.beginPath();
+    ctx.moveTo(0, h * 0.86);
+    ctx.lineTo(w * 0.16, h * 0.52);
+    ctx.lineTo(w * 0.34, h * 0.86);
+    ctx.lineTo(w * 0.5, h * 0.58);
+    ctx.lineTo(w * 0.68, h * 0.86);
+    ctx.lineTo(w * 0.86, h * 0.5);
+    ctx.lineTo(w, h * 0.78);
+    ctx.lineTo(w, h);
+    ctx.lineTo(0, h);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#f6fbff';
+    drawSnowCap(ctx, w * 0.16, h * 0.52, w * 0.035);
+    drawSnowCap(ctx, w * 0.5, h * 0.58, w * 0.03);
+    drawSnowCap(ctx, w * 0.86, h * 0.5, w * 0.032);
+
+    ctx.fillStyle = '#b7d2e9';
+    ctx.beginPath();
+    ctx.moveTo(0, h * 0.92);
+    ctx.lineTo(w * 0.28, h * 0.62);
+    ctx.lineTo(w * 0.52, h * 0.92);
+    ctx.lineTo(w * 0.78, h * 0.6);
+    ctx.lineTo(w, h * 0.88);
+    ctx.lineTo(w, h);
+    ctx.lineTo(0, h);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#f6fbff';
+    drawSnowCap(ctx, w * 0.28, h * 0.62, w * 0.028);
+    drawSnowCap(ctx, w * 0.78, h * 0.6, w * 0.03);
+
+    // 4. 雪松林剪影：深青松针压一层白雪，高矮错落（固定排布，帧间一致）
+    for (let i = 0; i < 9; i++) {
+        const tx = w * (0.06 + i * 0.115);
+        const th = h * (0.08 + ((i * 7) % 4) * 0.015);
+        const tw = th * 0.42;
+        const base = h * 0.93;
+        ctx.fillStyle = '#2f5d50';
+        ctx.beginPath();
+        ctx.moveTo(tx - tw, base);
+        ctx.lineTo(tx, base - th * 0.55);
+        ctx.lineTo(tx + tw, base);
+        ctx.closePath();
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(tx - tw * 0.7, base - th * 0.38);
+        ctx.lineTo(tx, base - th);
+        ctx.lineTo(tx + tw * 0.7, base - th * 0.38);
+        ctx.closePath();
+        ctx.fill();
+        // 树顶积雪
+        ctx.fillStyle = '#f6fbff';
+        ctx.beginPath();
+        ctx.moveTo(tx - tw * 0.28, base - th * 0.78);
+        ctx.lineTo(tx, base - th);
+        ctx.lineTo(tx + tw * 0.28, base - th * 0.78);
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    // 5. 下雪：正弦摇摆着往下飘，落出屏幕就回顶部接着下
+    SNOWFLAKES.forEach(f => {
+        const fx = ((f.x * w + Math.sin(frame * 0.015 + f.phase) * f.sway) % w + w) % w;
+        const fy = ((f.y * h + frame * f.speed) % (h + 10)) - 5;
+        ctx.fillStyle = `rgba(255, 255, 255, ${0.55 + (f.size / 3.6) * 0.4})`;
+        ctx.beginPath();
+        ctx.arc(fx, fy, f.size, 0, Math.PI * 2);
+        ctx.fill();
+    });
 };
 
 // === 物理参数 (提速版) ===
@@ -865,12 +1011,21 @@ const NIGHT_PLATFORMS: Platform[] = [
     { x: 520, y: 280, width: 260, height: 22 }
 ];
 
+// 雪原地图平台：覆雪冰台
+const SNOW_PLATFORMS: Platform[] = [
+    { x: 320, y: 470, width: 180, height: 22 },
+    { x: 780, y: 470, width: 180, height: 22 },
+    { x: 520, y: 280, width: 250, height: 22 },
+    { x: 1010, y: 340, width: 130, height: 22 }
+];
+
 const basePlatformsOf = (m: MapType): Platform[] =>
     m === 'forest' ? FOREST_PLATFORMS
     : m === 'desert' ? DESERT_PLATFORMS
     : m === 'ocean' ? OCEAN_PLATFORMS
     : m === 'volcano' ? VOLCANO_PLATFORMS
     : m === 'night' ? NIGHT_PLATFORMS
+    : m === 'snow' ? SNOW_PLATFORMS
     : NEON_PLATFORMS;
 
 // ================= 每局随机地形 =================
@@ -1249,6 +1404,7 @@ const OBSTACLE_PALETTE: Record<MapType, {
     ocean:   { hazard: '#e11d48', hazardDark: '#881337', block: '#44636f', blockTop: '#7ba6b5', blockEdge: '#e07a9a', mover: '#44636f', moverEdge: '#7dd3fc' },
     volcano: { hazard: '#ff5722', hazardDark: '#7c2d12', block: '#4a3333', blockTop: '#6b4a4a', blockEdge: '#ff8c3a', mover: '#4a3333', moverEdge: '#ff8c3a' },
     night:   { hazard: '#b91c5c', hazardDark: '#4c1030', block: '#3b3b58', blockTop: '#52527a', blockEdge: '#818cf8', mover: '#3b3b58', moverEdge: '#a5b4fc' },
+    snow:    { hazard: '#0284c7', hazardDark: '#0c4a6e', block: '#a9d4ef', blockTop: '#e8f5fd', blockEdge: '#38bdf8', mover: '#a9d4ef', moverEdge: '#e0f2fe' },
 };
 
 // 绘制障碍：伤害陷阱（尖刺）/ 实心阻挡（箱子）/ 移动平台（带轨迹虚线）
@@ -1339,6 +1495,28 @@ const paintPlatforms = (
             ctx.fill();
             ctx.fillStyle = 'rgba(148, 163, 255, 0.35)';
             roundRectPath(ctx, p.x + 4, p.y + 4, p.width - 8, 3, 1.5);
+            ctx.fill();
+        });
+    } else if (map === 'snow') {
+        // 雪原：寒冰台 + 两边垂下来的厚积雪盖
+        platforms.forEach(p => {
+            const ice = ctx.createLinearGradient(0, p.y, 0, p.y + p.height);
+            ice.addColorStop(0, '#a9d4ef');
+            ice.addColorStop(1, '#6aa8d4');
+            ctx.fillStyle = ice;
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 10);
+            ctx.fill();
+            // 冰面高光
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+            roundRectPath(ctx, p.x + 5, p.y + 6, p.width - 10, 3, 1.5);
+            ctx.fill();
+            // 积雪顶盖（比台子宽一点，像雪压出来的边）
+            ctx.fillStyle = '#f8fcff';
+            roundRectPath(ctx, p.x - 3, p.y - 5, p.width + 6, 10, 5);
+            ctx.fill();
+            // 雪盖下沿淡影，分出层次
+            ctx.fillStyle = 'rgba(148, 187, 219, 0.45)';
+            roundRectPath(ctx, p.x - 1, p.y + 3, p.width + 2, 3, 1.5);
             ctx.fill();
         });
     } else {
@@ -3664,6 +3842,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           drawVolcanoBackground(ctx, canvas.width, canvas.height, frameRef.current);
       } else if (map === 'night') {
           drawNightBackground(ctx, canvas.width, canvas.height, frameRef.current);
+      } else if (map === 'snow') {
+          drawSnowBackground(ctx, canvas.width, canvas.height, frameRef.current);
       } else {
           drawNeonBackground(ctx, canvas.width, canvas.height, frameRef.current);
       }
@@ -3781,6 +3961,32 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           moonGrad.addColorStop(1, 'rgba(148, 163, 255, 0.14)');
           ctx.fillStyle = moonGrad;
           ctx.fillRect(0, GROUND_Y - 36, canvas.width, 46);
+      } else if (map === 'snow') {
+          // 雪地：亮白雪面，底下压淡蓝冰土层，越往下越冷
+          ctx.fillStyle = '#f7fbff';
+          ctx.fillRect(0, GROUND_Y - 4, canvas.width, 12);
+          ctx.fillStyle = '#e3effa';
+          ctx.fillRect(0, GROUND_Y + 8, canvas.width, 18);
+          ctx.fillStyle = '#c9def0';
+          ctx.fillRect(0, GROUND_Y + 26, canvas.width, canvas.height - GROUND_Y - 26);
+          // 雪面起伏的浅影（固定排布，帧间一致）
+          ctx.fillStyle = 'rgba(163, 196, 226, 0.35)';
+          for (let x = 20; x < canvas.width; x += 130) {
+              const mx = x + (x * 13) % 40;
+              ctx.beginPath();
+              ctx.ellipse(mx, GROUND_Y + 3, 34, 5, 0, 0, Math.PI * 2);
+              ctx.fill();
+          }
+          // 雪粒闪光：落在亮雪层上一眨一眨的小亮点
+          for (let i = 0; i < 14; i++) {
+              const gx = ((i * 97) % 100) / 100 * canvas.width;
+              const twinkle = Math.sin(frameRef.current * 0.06 + i * 1.7);
+              if (twinkle <= 0.3) continue;
+              ctx.fillStyle = `rgba(255, 255, 255, ${0.4 + twinkle * 0.5})`;
+              ctx.beginPath();
+              ctx.arc(gx, GROUND_Y + 1 + (i % 3) * 3, 1.6, 0, Math.PI * 2);
+              ctx.fill();
+          }
       } else {
           ctx.fillStyle = '#1e293b';
           ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);

@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { CustomWeapon, CustomWeaponTemplate, WeaponType } from '../types';
+import { CustomWeapon, CustomWeaponTemplate, WeaponStats, WeaponStatKey, WeaponType } from '../types';
 import {
+  BUILTIN_STAT_FIELDS,
+  BUILTIN_STATS,
   BUILTIN_WEAPONS,
   CUSTOM_COLORS,
   CUSTOM_EMOJIS,
@@ -9,9 +11,14 @@ import {
   TEMPLATE_INFO,
   WeaponConfig,
   addCustom,
+  getBuiltinStats,
+  isBuiltinModified,
   loadWeapons,
   removeCustom,
+  resetBuiltinStats,
   setBuiltinEnabled,
+  statLimit,
+  updateBuiltinStats,
   updateCustom,
 } from '../services/weaponService';
 
@@ -21,9 +28,10 @@ interface WeaponArsenalProps {
 
 /*
   武器库：管理「天上掉什么武器」。
-  - 内置 14 种：只能启用 / 禁用（禁用后不再掉落，含稀有槽位）；
+  - 内置 14 种：可启用 / 禁用（禁用后不再掉落，含稀有槽位），还能「调一调」改数值
+    （伤害 / 弹药等，按武器开放子集，可恢复默认，存 overrides，见 weaponService）；
   - 自创武器：模板 + 参数，支持增 / 改 / 删，跨版本保留（见 weaponService）。
-  这里只改 localStorage 存档，游戏每局生成掉落物时才读池子，所以改完下一局生效。
+  这里只改 localStorage 存档，游戏开火 / 拾取时才读数值，所以改完下一局生效。
 */
 
 // ---- 小零件 ----
@@ -225,11 +233,97 @@ const WeaponEditor: React.FC<{
   );
 };
 
+// ---- 内置武器「调一调」编辑器 ----
+// 名字 / emoji 不改，只调数值（伤害/弹药/间隔等，按武器开放子集），可一键恢复默认。
+const BuiltinStatEditor: React.FC<{
+  type: WeaponType;
+  name: string;
+  emoji: string;
+  onDone: () => void; // 存好 / 恢复默认 / 取消都从这里关
+}> = ({ type, name, emoji, onDone }) => {
+  const fields = BUILTIN_STAT_FIELDS[type];
+  // 草稿 = 默认值 + 玩家已调的值（getBuiltinStats 就是这个合并结果）
+  const [draft, setDraft] = useState<WeaponStats>(() => ({ ...getBuiltinStats(type) }));
+
+  const setValue = (key: WeaponStatKey, v: number) =>
+    setDraft(d => ({ ...d, [key]: v }));
+
+  // 有没有动过（和默认值比），决定「存好」按钮是否亮起
+  const dirty = fields.some(f => draft[f.key] !== BUILTIN_STATS[type][f.key]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/50 p-4"
+    >
+      <motion.div
+        initial={{ scale: 0.85, y: 30 }}
+        animate={{ scale: 1, y: 0 }}
+        transition={{ type: 'spring', bounce: 0.35 }}
+        className="w-full max-w-md max-h-full overflow-y-auto rounded-3xl border-4 border-white bg-white/95 p-5 shadow-2xl"
+      >
+        <div className="flex items-center justify-between mb-1">
+          <span className="font-body text-2xl font-black text-slate-700">⚙️ 调一调</span>
+          <span className="flex items-center gap-2 rounded-full bg-blue-100 border-2 border-blue-200 px-4 py-1">
+            <span className="text-2xl">{emoji}</span>
+            <span className="font-body text-lg font-black text-blue-700">{name}</span>
+          </span>
+        </div>
+        <p className="font-body text-xs font-bold text-slate-400 mb-4 text-center">调完存好，下一局生效</p>
+
+        <div className="flex flex-col gap-2.5 rounded-2xl bg-slate-100 border-2 border-slate-200 p-3 mb-5">
+          {fields.map(f => {
+            const [min, max] = statLimit(type, f.key);
+            return (
+              <ParamSlider
+                key={f.key}
+                icon={f.icon}
+                label={f.label}
+                value={draft[f.key] ?? 0}
+                min={min}
+                max={max}
+                onChange={v => setValue(f.key, v)}
+              />
+            );
+          })}
+        </div>
+
+        <div className="flex justify-center gap-3 flex-wrap">
+          <BigButton
+            color="white"
+            onClick={() => {
+              // 恢复默认：清掉这件武器的全部调整
+              resetBuiltinStats(type);
+              onDone();
+            }}
+          >
+            ↩️ 恢复默认
+          </BigButton>
+          <BigButton
+            color="green"
+            onClick={() => {
+              const patch: Partial<WeaponStats> = {};
+              fields.forEach(f => { patch[f.key] = draft[f.key]; });
+              updateBuiltinStats(type, patch);
+              onDone();
+            }}
+          >
+            {dirty ? '💾 存好' : '💾 没动过'}
+          </BigButton>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+};
+
 // ---- 武器库主面板 ----
 const WeaponArsenal: React.FC<WeaponArsenalProps> = ({ onClose }) => {
   const [cfg, setCfg] = useState<WeaponConfig>(() => ({ ...loadWeapons() }));
   // editor === null 关闭；editor.weapon === null 表示「新增」，否则编辑那件
   const [editor, setEditor] = useState<{ weapon: CustomWeapon | null } | null>(null);
+  // statEditor：正在「调一调」的内置武器
+  const [statEditor, setStatEditor] = useState<WeaponType | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   // loadWeapons 返回的是模块级缓存（同一引用），摊平一份才能触发重渲染
@@ -271,7 +365,7 @@ const WeaponArsenal: React.FC<WeaponArsenalProps> = ({ onClose }) => {
           <section>
             <div className="flex items-center gap-2 mb-2">
               <span className="font-body text-lg font-black text-white drop-shadow-md">🎁 内置武器</span>
-              <span className="font-body text-xs font-bold text-white/80">点按钮决定它会不会从天上掉下来</span>
+              <span className="font-body text-xs font-bold text-white/80">点按钮决定掉不掉；⚙️ 调一调能改它的伤害和弹药</span>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
               {BUILTIN_WEAPONS.map(w => {
@@ -288,6 +382,10 @@ const WeaponArsenal: React.FC<WeaponArsenalProps> = ({ onClose }) => {
                     <span className="text-4xl drop-shadow">{w.emoji}</span>
                     <span className="font-body text-sm font-black text-slate-700">
                       {w.name}{w.rare && <span className="ml-1" title="稀有武器">🌟</span>}
+                      {isBuiltinModified(w.type) && (
+                        <span className="ml-1 rounded-full bg-amber-100 border border-amber-300 px-1.5 py-px align-middle
+                          font-body text-[10px] font-black text-amber-600">🔧 已调整</span>
+                      )}
                     </span>
                     <span className="font-body text-[11px] font-bold text-slate-500 text-center leading-tight min-h-[2em]">
                       {w.desc}
@@ -301,6 +399,13 @@ const WeaponArsenal: React.FC<WeaponArsenalProps> = ({ onClose }) => {
                           : 'bg-emerald-400 border-emerald-200 text-white'}`}
                     >
                       {disabled ? '🚫 已禁用 · 点我启用' : '✅ 上场中'}
+                    </motion.button>
+                    <motion.button
+                      whileTap={{ scale: 0.93 }}
+                      onClick={() => setStatEditor(w.type)}
+                      className="w-full rounded-full border-2 border-blue-200 bg-blue-400 py-1 font-body text-xs font-black text-white"
+                    >
+                      ⚙️ 调一调
                     </motion.button>
                   </motion.div>
                 );
@@ -399,6 +504,16 @@ const WeaponArsenal: React.FC<WeaponArsenalProps> = ({ onClose }) => {
             setEditor(null);
             refresh();
           }}
+        />
+      )}
+
+      {/* 内置武器「调一调」弹层 */}
+      {statEditor && (
+        <BuiltinStatEditor
+          type={statEditor}
+          name={BUILTIN_WEAPONS.find(w => w.type === statEditor)?.name ?? ''}
+          emoji={BUILTIN_WEAPONS.find(w => w.type === statEditor)?.emoji ?? '⚙️'}
+          onDone={() => { setStatEditor(null); refresh(); }}
         />
       )}
     </motion.div>

@@ -23,6 +23,7 @@ const MAPS: { id: MapType; name: string; icon: string; active: string; ring: str
   { id: 'desert', name: '沙漠', icon: '🏜️', active: 'from-amber-500 to-orange-500 shadow-amber-700', ring: 'border-amber-200' },
   { id: 'ocean', name: '海洋', icon: '🌊', active: 'from-cyan-500 to-sky-500 shadow-cyan-700', ring: 'border-cyan-200' },
   { id: 'volcano', name: '火山', icon: '🌋', active: 'from-red-500 to-rose-500 shadow-red-700', ring: 'border-rose-200' },
+  { id: 'night', name: '黑夜', icon: '🌙', active: 'from-indigo-500 to-violet-600 shadow-indigo-700', ring: 'border-indigo-200' },
 ];
 
 // 首页天空装饰配置：云朵都从右往左慢慢飘（负 delay 让打开页面时它们已经散开），
@@ -40,6 +41,14 @@ const CLOUDS: { top: string; look: string; duration: number; delay: number }[] =
 const BIRDS: { top: string; duration: number; delay: number; bob: number; tilt: number; scale: number }[] = [
   { top: '5rem',   duration: 36, delay: -8,  bob: 2.2, tilt: 2.8, scale: 1 },
   { top: '9.5rem', duration: 75, delay: -38, bob: 3.4, tilt: 4.2, scale: 0.7 },
+];
+
+// 天上的小鸟（家燕）：和纸飞机错开高度，远近三只——远处的小、扇得快，
+// 一只往右、一只往左（往左的是镜像小鸟）。
+const SKY_BIRDS: { top: string; duration: number; delay: number; bob: number; tilt: number; scale: number; dir: 1 | -1; flap: number }[] = [
+  { top: '3.5rem', duration: 30, delay: -12, bob: 2.6, tilt: 3.2, scale: 0.9,  dir: 1,  flap: 1.5 },
+  { top: '7.5rem', duration: 55, delay: -30, bob: 3.2, tilt: 4,   scale: 0.62, dir: -1, flap: 1.3 },
+  { top: '1.8rem', duration: 70, delay: -50, bob: 2.4, tilt: 3.6, scale: 0.45, dir: 1,  flap: 0.95 },
 ];
 
 // 标题「火柴人大战」的糖果贴纸块：一字一块圆角糖果牌，各自微微歪一点更可爱
@@ -98,6 +107,54 @@ const PaperPlane: React.FC = () => (
     <path d="M64 17 L4 30 L24 18 Z" fill="#e2e8f0" stroke="#94a3b8" strokeWidth="1.5" strokeLinejoin="round" />
     {/* 中缝折痕 */}
     <path d="M64 17 L24 17" stroke="#94a3b8" strokeWidth="1.2" strokeLinecap="round" />
+  </svg>
+);
+
+// 小鸟（家燕）：深背浅腹、叉形尾羽、栗红喉咙——照着真鸟的样子画。
+// 真实感的三个关键：
+// 1. 两片翅膀（远翅先画、深一点、相位错开 0.12s）——真鸟的两翅不在一个平面；
+// 2. 扇-滑-扇的节奏（times 关键帧里停 0.3 秒滑翔）——真鸟不是匀速扇翅膀；
+// 3. 远处那只更小、扇得更快——像飞在更远的天上。
+// 翅膀旋转中心用 fill-box 相对坐标 + originX/originY 指到肩关节那一角
+// （motion 会把普通 transformOrigin 覆盖成 50% 50%，这是踩过的坑）。
+const Bird: React.FC<{ flap?: number }> = ({ flap = 1.5 }) => (
+  <svg width="56" height="40" viewBox="0 0 60 40" fill="none"
+    className="drop-shadow-[0_2px_4px_rgba(30,64,175,0.25)]">
+    <defs>
+      {/* 背深腹白的纵向渐变，像真的家燕 */}
+      <linearGradient id="birdBody" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#3a4666" />
+        <stop offset="0.55" stopColor="#4a5670" />
+        <stop offset="1" stopColor="#e9e4d2" />
+      </linearGradient>
+    </defs>
+    {/* 远翅：更深更透明，扇动相位略微错开，看起来在身体的另一侧 */}
+    <motion.path
+      d="M28 16 C20 6 10 3 3 5 C9 10 15 12 18 18 Z"
+      fill="#2c3650" opacity="0.8"
+      animate={{ rotate: [20, -28, 14, 14, 20] }}
+      transition={{ duration: flap, times: [0, 0.3, 0.55, 0.85, 1], repeat: Infinity, ease: 'easeInOut', delay: -0.12 }}
+      style={{ transformBox: 'fill-box', originX: '100%', originY: '100%' }}
+    />
+    {/* 叉形尾羽（家燕的标志） */}
+    <path d="M13 19 L0 12 L7 20 L1 27 L13 22 Z" fill="#2c3650" />
+    {/* 头 + 身：上深下浅 */}
+    <path d="M40 12 C47 12 51 15 51 19 C51 24 45 28 37 29 C29 30 21 29 15 26 C11 24 9 22 9 21 C9 19 12 15 18 13 C24 11 33 12 40 12 Z" fill="url(#birdBody)" />
+    {/* 喉部的栗红（家燕特征） */}
+    <path d="M50 21 C48 25 43 26 38 25 C41 22 45 21 50 21 Z" fill="#b45309" />
+    {/* 小尖嘴 */}
+    <path d="M50 17 L57 19 L50 21 Z" fill="#1f2937" />
+    {/* 眼睛 + 一点反光 */}
+    <circle cx="45" cy="16" r="1.7" fill="#111827" />
+    <circle cx="45.6" cy="15.4" r="0.5" fill="#ffffff" />
+    {/* 近翅：盖在背上，扇一下停一下再扇 */}
+    <motion.path
+      d="M31 18 C24 6 11 1 3 3 C10 9 17 13 21 20 Z"
+      fill="#3a4666"
+      animate={{ rotate: [24, -34, 18, 18, 24] }}
+      transition={{ duration: flap, times: [0, 0.3, 0.55, 0.85, 1], repeat: Infinity, ease: 'easeInOut' }}
+      style={{ transformBox: 'fill-box', originX: '100%', originY: '100%' }}
+    />
   </svg>
 );
 
@@ -229,6 +286,31 @@ const MainMenu: React.FC<MainMenuProps> = ({ setGameState, setGameMode, map, set
             className="absolute left-0 select-none"
           >
             <PaperPlane />
+          </motion.div>
+        ))}
+
+        {/* 小鸟（家燕）：远近三只，翅膀自己扇，飞行节奏和纸飞机错开 */}
+        {SKY_BIRDS.map(b => (
+          <motion.div
+            key={`bird-${b.top}`}
+            animate={{
+              x: b.dir === 1 ? ['-15vw', '105vw'] : ['105vw', '-15vw'],
+              y: [0, -8, 0],
+              rotate: [2, -3, 2],
+            }}
+            transition={{
+              x: { duration: b.duration, repeat: Infinity, ease: 'linear', delay: b.delay },
+              y: { duration: b.bob, repeat: Infinity, ease: 'easeInOut', delay: -b.bob / 3 },
+              rotate: { duration: b.tilt, repeat: Infinity, ease: 'easeInOut', delay: -b.tilt / 2 },
+            }}
+            style={{ top: b.top, scale: b.scale }}
+            className="absolute left-0 select-none"
+          >
+            {/* 往左飞的小鸟：水平翻转一下（小鸟默认头朝右）。
+                这层是普通 div，不动它就不会被 motion 的 transform 覆盖。 */}
+            <div style={b.dir === -1 ? { transform: 'scaleX(-1)' } : undefined}>
+              <Bird flap={b.flap} />
+            </div>
           </motion.div>
         ))}
 

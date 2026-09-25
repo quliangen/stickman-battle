@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useCallback } from 'react';
 import { GameState, Entity, Vector, Particle, GameStats, GameMode, MapType, FallingItem, Projectile, WeaponType, Platform, Obstacle, AnyWeaponId } from '../types';
 import { playJumpSound, playAttackSound, playHitSound, playShootSound, playExplodeSound, playDragonRoar } from '../services/audioService';
-import { getDropPool, getCustom, isBuiltinDisabled, isCustomId } from '../services/weaponService';
+import { getDropPool, getCustom, getBuiltinStats, isBuiltinDisabled, isCustomId } from '../services/weaponService';
 
 interface GameCanvasProps {
   gameState: GameState;
@@ -648,6 +648,124 @@ const drawVolcanoBackground = (
   ctx.globalAlpha = 1;
 };
 
+// ================= 黑夜动态背景 =================
+// 和其他地图同一套约定：静态元素（星星）用固定种子 PRNG 预生成，帧间一致；
+// 动态效果（眨眼、萤火虫飘）以 frame 为时间轴。
+interface NightStar {
+  x: number;
+  y: number;
+  size: number;
+  phase: number;
+  speed: number; // 眨眼节奏
+}
+
+interface NightFirefly {
+  x: number;
+  y: number;
+  size: number;
+  phase: number;
+  drift: number; // 飘动幅度
+  speed: number;
+}
+
+const NIGHT_STARS: NightStar[] = (() => {
+  const rand = mulberry32(20260925);
+  return Array.from({ length: 90 }, () => ({
+    x: rand(),
+    y: rand() * 0.62, // 只在上半屏，月亮和星空的位置
+    size: 0.8 + rand() * 2.2,
+    phase: rand() * Math.PI * 2,
+    speed: 0.02 + rand() * 0.06,
+  }));
+})();
+
+const NIGHT_FIREFLIES: NightFirefly[] = (() => {
+  const rand = mulberry32(20260926);
+  return Array.from({ length: 14 }, () => ({
+    x: 0.06 + rand() * 0.88,
+    y: 0.62 + rand() * 0.28, // 贴着草地上方低飞
+    size: 2 + rand() * 2.5,
+    phase: rand() * Math.PI * 2,
+    drift: 14 + rand() * 26,
+    speed: 0.008 + rand() * 0.012,
+  }));
+})();
+
+const drawNightBackground = (
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  frame: number
+) => {
+  // 1. 夜空渐变：藏青 → 深蓝，贴近地平线透一点夜色蓝
+  const sky = ctx.createLinearGradient(0, 0, 0, h);
+  sky.addColorStop(0, '#0b1026');
+  sky.addColorStop(0.55, '#131a3a');
+  sky.addColorStop(1, '#1c2650');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, w, h);
+
+  // 2. 星星：正弦眨眼，亮度偶尔到 0 也像真的
+  NIGHT_STARS.forEach(s => {
+    const a = 0.35 + 0.65 * Math.max(0, Math.sin(frame * s.speed + s.phase));
+    ctx.fillStyle = `rgba(226, 232, 255, ${a})`;
+    ctx.beginPath();
+    ctx.arc(s.x * w, s.y * h, s.size, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // 3. 月亮：右上角，带柔光和几个环形山
+  const mx = w * 0.82;
+  const my = h * 0.18;
+  const mr = Math.min(w, h) * 0.075;
+  ctx.globalCompositeOperation = 'screen';
+  const halo = ctx.createRadialGradient(mx, my, mr * 0.4, mx, my, mr * 4);
+  halo.addColorStop(0, 'rgba(255, 250, 220, 0.28)');
+  halo.addColorStop(1, 'rgba(255, 250, 220, 0)');
+  ctx.fillStyle = halo;
+  ctx.fillRect(0, 0, w, h);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = '#f8f4da';
+  ctx.beginPath();
+  ctx.arc(mx, my, mr, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(200, 190, 160, 0.5)';
+  ctx.beginPath(); ctx.arc(mx - mr * 0.3, my - mr * 0.25, mr * 0.18, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(mx + mr * 0.25, my + mr * 0.1, mr * 0.12, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(mx - mr * 0.05, my + mr * 0.4, mr * 0.08, 0, Math.PI * 2); ctx.fill();
+
+  // 4. 远山剪影：两层，越近越深
+  ctx.fillStyle = 'rgba(23, 30, 62, 0.8)';
+  ctx.beginPath();
+  ctx.moveTo(0, h * 0.9);
+  for (let i = 0; i <= 8; i++) {
+    ctx.quadraticCurveTo(
+      (i - 0.5) * (w / 8), h * (0.72 + ((i * 7) % 5) * 0.018),
+      i * (w / 8), h * (0.8 + ((i * 3) % 4) * 0.012)
+    );
+  }
+  ctx.lineTo(w, h);
+  ctx.lineTo(0, h);
+  ctx.closePath();
+  ctx.fill();
+
+  // 5. 萤火虫：草地上一亮一灭地飘（亮的时候才画光晕）
+  NIGHT_FIREFLIES.forEach(f => {
+    const fx = f.x * w + Math.sin(frame * 0.01 + f.phase) * f.drift;
+    const fy = f.y * h + Math.cos(frame * 0.013 + f.phase * 1.7) * f.drift * 0.4;
+    const a = Math.max(0, Math.sin(frame * f.speed * 60 * 0.05 + f.phase));
+    if (a <= 0.05) return;
+    ctx.fillStyle = `rgba(214, 255, 138, ${0.7 * a})`;
+    ctx.beginPath();
+    ctx.arc(fx, fy, f.size, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = `rgba(190, 255, 120, ${0.16 * a})`;
+    ctx.beginPath();
+    ctx.arc(fx, fy, f.size * 3.2, 0, Math.PI * 2);
+    ctx.fill();
+  });
+};
+
 // === 物理参数 (提速版) ===
 const GRAVITY = 0.8;
 const FRICTION = 0.82;
@@ -740,11 +858,19 @@ const VOLCANO_PLATFORMS: Platform[] = [
     { x: 540, y: 260, width: 200, height: 22 }
 ];
 
+// 黑夜地图平台：夜色草地上的木台
+const NIGHT_PLATFORMS: Platform[] = [
+    { x: 320, y: 470, width: 180, height: 22 },
+    { x: 780, y: 470, width: 180, height: 22 },
+    { x: 520, y: 280, width: 260, height: 22 }
+];
+
 const basePlatformsOf = (m: MapType): Platform[] =>
     m === 'forest' ? FOREST_PLATFORMS
     : m === 'desert' ? DESERT_PLATFORMS
     : m === 'ocean' ? OCEAN_PLATFORMS
     : m === 'volcano' ? VOLCANO_PLATFORMS
+    : m === 'night' ? NIGHT_PLATFORMS
     : NEON_PLATFORMS;
 
 // ================= 每局随机地形 =================
@@ -1122,6 +1248,7 @@ const OBSTACLE_PALETTE: Record<MapType, {
     desert:  { hazard: '#dc2626', hazardDark: '#7f1d1d', block: '#c08a4a', blockTop: '#d8a763', blockEdge: '#8a5f2b', mover: '#c08a4a', moverEdge: '#ffe9b8' },
     ocean:   { hazard: '#e11d48', hazardDark: '#881337', block: '#44636f', blockTop: '#7ba6b5', blockEdge: '#e07a9a', mover: '#44636f', moverEdge: '#7dd3fc' },
     volcano: { hazard: '#ff5722', hazardDark: '#7c2d12', block: '#4a3333', blockTop: '#6b4a4a', blockEdge: '#ff8c3a', mover: '#4a3333', moverEdge: '#ff8c3a' },
+    night:   { hazard: '#b91c5c', hazardDark: '#4c1030', block: '#3b3b58', blockTop: '#52527a', blockEdge: '#818cf8', mover: '#3b3b58', moverEdge: '#a5b4fc' },
 };
 
 // 绘制障碍：伤害陷阱（尖刺）/ 实心阻挡（箱子）/ 移动平台（带轨迹虚线）
@@ -1196,6 +1323,23 @@ const paintPlatforms = (
             roundRectPath(ctx, p.x + 3, p.y - 3, p.width - 6, 5, 2.5);
             ctx.fill();
             ctx.restore();
+        });
+    } else if (map === 'night') {
+        // 黑夜：深色木台 + 月光色的顶边（夜里站得住看得清）
+        platforms.forEach(p => {
+            const body = ctx.createLinearGradient(0, p.y, 0, p.y + p.height);
+            body.addColorStop(0, '#3b3b58');
+            body.addColorStop(1, '#24243a');
+            ctx.fillStyle = body;
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 10);
+            ctx.fill();
+            // 月光顶面
+            ctx.fillStyle = '#818cf8';
+            roundRectPath(ctx, p.x + 3, p.y - 3, p.width - 6, 5, 2.5);
+            ctx.fill();
+            ctx.fillStyle = 'rgba(148, 163, 255, 0.35)';
+            roundRectPath(ctx, p.x + 4, p.y + 4, p.width - 8, 3, 1.5);
+            ctx.fill();
         });
     } else {
         // 霓虹都市：金属平台 + 青色霓虹边
@@ -1855,13 +1999,15 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
         spawnParticles(c4.pos.x, c4.pos.y - 10, '#555', 20, 8, 2);
         spawnShockwave(c4.pos.x, c4.pos.y);
         spawnExplosionCloud(c4.pos.x, c4.pos.y - 10, 0.9);
-        // 范围伤害（不伤及埋设者本人），半径约 220
+        // 范围伤害（不伤及埋设者本人）：伤害/半径发射时已烘焙到弹上
+        const c4Radius = c4.blastRadius ?? 220;
+        const c4Damage = c4.damage ?? 40;
         entitiesRef.current.forEach(target => {
             if (target.id === c4.ownerId || target.isDead) return;
             const dx = target.pos.x - c4.pos.x;
             const dy = target.pos.y - c4.pos.y;
-            if (dx * dx + dy * dy < 220 * 220) {
-                target.health -= 40;
+            if (dx * dx + dy * dy < c4Radius * c4Radius) {
+                target.health -= c4Damage;
                 target.stunFrames = 35;
                 const angle = Math.atan2(dy, dx);
                 target.vel.x = Math.cos(angle) * 35;
@@ -1995,7 +2141,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                 // 造成一次伤害
                 if (proj.attackTimer === 20) {
                      if (target && !target.isDead) {
-                         target.health -= 20;
+                         target.health -= proj.damage ?? 20;
                          target.stunFrames = 40; // 麻痹效果
                          playExplodeSound();
                          shakeRef.current = 10;
@@ -2049,14 +2195,16 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                 const interval = 12; // 投弹间隔帧数
                 if (frameRef.current - (proj.lastHitFrame || 0) > interval) {
                     proj.lastHitFrame = frameRef.current;
-                    // 投掷炸弹
+                    // 投掷炸弹：继承轰炸机的数值（小炸弹=20 伤/半径120，与整颗手雷区分）
                     projectilesRef.current.push({
                         id: Math.random().toString(),
                         type: 'bomb',
                         pos: { x: proj.pos.x, y: proj.pos.y + 20 },
                         vel: { x: proj.vel.x * 0.5, y: 5 }, // 继承一点惯性
                         ownerId: proj.ownerId,
-                        width: 20, height: 20, active: true
+                        width: 20, height: 20, active: true,
+                        damage: proj.damage,
+                        blastRadius: proj.blastRadius
                     });
                     if (proj.bombDropCount !== undefined) proj.bombDropCount++;
                     
@@ -2129,7 +2277,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                             if (proj.remainingHits && proj.remainingHits > 0) {
                                 proj.remainingHits--;
                                 
-                                target.health -= 5;
+                                target.health -= proj.damage ?? 5;
                                 target.stunFrames = 20;
                                 target.vel.x = (Math.random()-0.5) * 30;
                                 target.vel.y = -15;
@@ -2249,13 +2397,15 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                     spawnShockwave(proj.pos.x, GROUND_Y - 10, '#ffb46b', 1.2);
                     spawnExplosionCloud(proj.pos.x, GROUND_Y - 10, 0.7);
 
-                    // 范围伤害 + 强力上抛
+                    // 范围伤害 + 强力上抛：数值发射时已烘焙到弹上
+                    const piercerRadius = proj.blastRadius ?? 200;
+                    const piercerDamage = proj.damage ?? 30;
                     entitiesRef.current.forEach(target => {
                         if (target.id === proj.ownerId || target.isDead) return;
                         const dx = target.pos.x - proj.pos.x;
                         const dy = target.pos.y - GROUND_Y;
-                        if (dx * dx + dy * dy < 200 * 200) {
-                            target.health -= 30;
+                        if (dx * dx + dy * dy < piercerRadius * piercerRadius) {
+                            target.health -= piercerDamage;
                             target.stunFrames = 40;
                             target.vel.x = (dx >= 0 ? 1 : -1) * 22;
                             target.vel.y = -26;
@@ -2302,12 +2452,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                 return;
             }
 
-            // cloud 状态：持续扩散并造成持续伤害
+            // cloud 状态：持续扩散并造成持续伤害（半径来自武器库数值，默认 120）
+            const gasMaxRadius = proj.blastRadius ?? 120;
             proj.gasTimer = (proj.gasTimer || 0) + 1;
             if (proj.gasTimer < 20) {
-                proj.gasRadius = 10 + (proj.gasTimer / 20) * 110; // 0~20 帧长大到 120
+                proj.gasRadius = 10 + (proj.gasTimer / 20) * (gasMaxRadius - 10);
             } else {
-                proj.gasRadius = 120;
+                proj.gasRadius = gasMaxRadius;
             }
 
             // 5 秒后消散
@@ -2325,7 +2476,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                 );
             }
 
-            // 持续伤害：每 8 帧对范围内玩家造成 1 点伤害
+            // 持续伤害：每 8 帧对范围内玩家造成 proj.damage（默认 1）点伤害
             if (proj.gasTimer % 8 === 0) {
                 const R = proj.gasRadius || 120;
                 entitiesRef.current.forEach(target => {
@@ -2333,7 +2484,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                     const dx = target.pos.x - proj.pos.x;
                     const dy = (target.pos.y - 30) - proj.pos.y;
                     if (dx * dx + dy * dy < (R + 30) * (R + 30)) {
-                        target.health -= 1;
+                        target.health -= proj.damage ?? 1;
                         spawnParticles(target.pos.x, target.pos.y - 30, '#a4e8a4', 2, 2, 0.5, 2);
                         if (target.health <= 0) {
                             target.health = 0;
@@ -2372,7 +2523,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                 if (Math.abs(proj.pos.x - target.pos.x) < 20 &&
                     proj.pos.y > target.pos.y - 75 && proj.pos.y < target.pos.y + 10) {
                     proj.active = false;
-                    target.health -= 6;
+                    target.health -= proj.damage ?? 6; // 伤害发射时已烘焙到弹上
                     target.stunFrames = 8;
                     target.vel.x += proj.vel.x > 0 ? 4 : -4;
                     playHitSound();
@@ -2402,7 +2553,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                 proj.active = false;
             }
 
-            const bulletDmg = proj.type === 'gatling' ? 4 : (proj.damage ?? 6);
+            // 伤害读发射时烘焙的 proj.damage（加特林默认 4，自创枪械默认 6）
+            const bulletDmg = proj.damage ?? (proj.type === 'gatling' ? 4 : 6);
             const tint = proj.tint ?? '#ffd23a';
 
             entitiesRef.current.forEach(target => {
@@ -2552,11 +2704,14 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                     spawnShockwave(proj.pos.x, proj.pos.y);
                     spawnExplosionCloud(proj.pos.x, proj.pos.y - 10); 
                     
+                    // 伤害/半径发射时已烘焙到弹上（手雷默认 25/180，轰炸机空投小炸弹 20/120）
+                    const bombRadius = proj.blastRadius ?? 180;
+                    const bombDamage = proj.damage ?? 25;
                     entitiesRef.current.forEach(target => {
                         if (!target.isDead) {
                             const dist = Math.sqrt(Math.pow(target.pos.x - proj.pos.x, 2) + Math.pow(target.pos.y - proj.pos.y, 2));
-                            if (dist < 180) {
-                                target.health -= 25; 
+                            if (dist < bombRadius) {
+                                target.health -= bombDamage;
                                 if (target.health <= 0) { target.health = 0; target.isDead = true; target.isLoser = true; }
                                 
                                 const angle = Math.atan2(target.pos.y - proj.pos.y, target.pos.x - proj.pos.x);
@@ -2630,7 +2785,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                         proj.pos.y > target.pos.y - 75 && proj.pos.y < target.pos.y + 10) {
                             
                         proj.active = false;
-                        const damage = isMissile ? 35 : 15; // 导弹伤害增加
+                        const damage = isMissile ? (proj.damage ?? 35) : 15; // 导弹伤害来自武器库
                         target.health -= damage; 
                         target.stunFrames = isMissile ? 40 : 10;
                         shakeRef.current = isMissile ? 25 : 5;
@@ -2748,20 +2903,23 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                 entity.heldWeapon = item.type;
                 entity.weaponDuration = WEAPON_LIFETIME; 
                 switch(item.type) {
-                    case 'bomb': entity.ammo = 3; break;
-                    case 'sword': entity.ammo = 8; break;
-                    case 'atom_bomb': entity.ammo = 1; break; 
-                    case 'missile': entity.ammo = 2; break; // 导弹只有2发
-                    case 'dragon': entity.ammo = 1; break; 
-                    case 'bomber': entity.ammo = 1; break; 
-                    case 'pokemon': entity.ammo = 1; break; 
-                    case 'laser': entity.ammo = 9; break; // 激光增加2倍，现在有9发
-                    case 'zeperion': entity.ammo = 3; break; // 哉佩利敖光线3发
-                    case 'c4': entity.ammo = 2; break; // C4：埋设 / 引爆各消耗 1 发
-                    case 'piercer': entity.ammo = 3; break; // 穿地弹 3 发
-                    case 'aug': entity.ammo = 20; break; // AUG 20 发
-                    case 'gas': entity.ammo = 2; break; // 毒气弹 2 发
-                    case 'gatling': entity.ammo = 40; break; // 加特林 40 发：单发刮痧，胜在泼洒
+                    // 内置武器：弹药量统一从武器库数值层读（默认值见 weaponService.BUILTIN_STATS，可在武器库「调一调」）
+                    case 'bomb':
+                    case 'sword':
+                    case 'atom_bomb':
+                    case 'missile':
+                    case 'dragon':
+                    case 'bomber':
+                    case 'pokemon':
+                    case 'laser':
+                    case 'zeperion':
+                    case 'c4':
+                    case 'piercer':
+                    case 'aug':
+                    case 'gas':
+                    case 'gatling':
+                        entity.ammo = getBuiltinStats(item.type).ammo;
+                        break;
                     default: {
                         // 自创武器：弹药量来自武器库存档
                         const cw = getCustom(item.type);
@@ -2957,10 +3115,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                 
                 // AI 攻击逻辑
                 let attackRange = ATTACK_RANGE;
-                if (entity.heldWeapon === 'atom_bomb') attackRange = 300; 
-                if (entity.heldWeapon === 'missile') attackRange = 700; 
-                if (entity.heldWeapon === 'dragon') attackRange = 400; 
-                if (entity.heldWeapon === 'bomber') attackRange = 800; 
+                if (entity.heldWeapon === 'sword') attackRange = getBuiltinStats('sword').range ?? 140; // 长剑射程可在武器库调
+                if (entity.heldWeapon === 'atom_bomb') attackRange = 300;
+                if (entity.heldWeapon === 'missile') attackRange = 700;
+                if (entity.heldWeapon === 'dragon') attackRange = 400;
+                if (entity.heldWeapon === 'bomber') attackRange = 800;
                 if (entity.heldWeapon === 'pokemon') attackRange = 800;
                 if (entity.heldWeapon === 'laser') attackRange = 1000;
                 if (entity.heldWeapon === 'zeperion') attackRange = 1000;
@@ -3000,6 +3159,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           const customW = getCustom(entity.heldWeapon);
 
           if (entity.heldWeapon === 'bomb') {
+              // 发射时把武器库数值烘焙到弹上（照抄自创武器先例，删改存档不影响飞行中的弹）
+              const st = getBuiltinStats('bomb');
               entity.vel.x += entity.facingRight ? -2 : 2;
               projectilesRef.current.push({
                   id: Math.random().toString(),
@@ -3007,7 +3168,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                   pos: { x: entity.pos.x, y: entity.pos.y - 60 },
                   vel: { x: entity.facingRight ? 12 : -12, y: -12 },
                   ownerId: entity.id,
-                  width: 20, height: 20, active: true
+                  width: 20, height: 20, active: true,
+                  damage: st.damage,
+                  blastRadius: st.blastRadius
               });
               entity.ammo--;
           } else if (entity.heldWeapon === 'atom_bomb') {
@@ -3022,19 +3185,22 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
               });
               entity.ammo--; 
           } else if (entity.heldWeapon === 'missile') {
-              playShootSound(); 
-              entity.vel.x += entity.facingRight ? -10 : 10; 
+              playShootSound();
+              const missileSt = getBuiltinStats('missile');
+              entity.vel.x += entity.facingRight ? -10 : 10;
               projectilesRef.current.push({
                   id: Math.random().toString(),
                   type: 'missile',
                   pos: { x: entity.pos.x + (entity.facingRight ? 50 : -50), y: entity.pos.y - 50 },
-                  vel: { x: entity.facingRight ? 10 : -10, y: -5 }, 
+                  vel: { x: entity.facingRight ? 10 : -10, y: -5 },
                   ownerId: entity.id,
-                  width: 20, height: 8, active: true
+                  width: 20, height: 8, active: true,
+                  damage: missileSt.damage
               });
-              entity.ammo--; 
+              entity.ammo--;
           } else if (entity.heldWeapon === 'dragon') {
               playDragonRoar();
+              const dragonSt = getBuiltinStats('dragon');
               projectilesRef.current.push({
                   id: Math.random().toString(),
                   type: 'dragon',
@@ -3042,16 +3208,18 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                   vel: { x: 0, y: 0 },
                   ownerId: entity.id,
                   width: 40, height: 40, active: true,
-                  dragonState: 'enter', 
+                  dragonState: 'enter',
                   remainingHits: 5,
                   dragonPathProgress: 0,
-                  dragonSegments: undefined
+                  dragonSegments: undefined,
+                  damage: dragonSt.damage
               });
               entity.ammo--;
           } else if (entity.heldWeapon === 'bomber') {
-              // 呼叫轰炸机
+              // 呼叫轰炸机：小炸弹数值挂在轰炸机身上，空投时继承（小而密三连炸，与整颗手雷区分）
               const startX = entity.facingRight ? -100 : canvas.width + 100;
               playShootSound(); // 使用枪声模拟无线电
+              const bomberSt = getBuiltinStats('bomber');
               projectilesRef.current.push({
                   id: Math.random().toString(),
                   type: 'bomber',
@@ -3060,12 +3228,15 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                   ownerId: entity.id,
                   width: 60, height: 20, active: true,
                   bomberState: 'fly_in',
-                  bombDropCount: 0
+                  bombDropCount: 0,
+                  damage: bomberSt.damage,
+                  blastRadius: bomberSt.blastRadius
               });
               entity.ammo--;
           } else if (entity.heldWeapon === 'pokemon') {
               playJumpSound();
               // 召唤皮卡丘
+              const pokemonSt = getBuiltinStats('pokemon');
               projectilesRef.current.push({
                   id: Math.random().toString(),
                   type: 'pokemon',
@@ -3074,12 +3245,15 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                   ownerId: entity.id,
                   width: 20, height: 20, active: true,
                   pokemonState: 'seeking',
-                  attackTimer: 0
+                  attackTimer: 0,
+                  damage: pokemonSt.damage
               });
               entity.ammo--;
           } else if (entity.heldWeapon === 'laser') {
-              // === 激光武器逻辑 ===
+              // === 激光武器逻辑：狙击定位 —— 瞬发高伤，但间隔长（不再一击必杀） ===
               playShootSound();
+              const laserSt = getBuiltinStats('laser');
+              entity.attackCooldown = laserSt.cooldown ?? ATTACK_COOLDOWN; // 默认 30 帧，慢射
               shakeRef.current = 20;
               
               const beamLength = 2000;
@@ -3095,15 +3269,21 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                           : (target.pos.x < startX && target.pos.x > endX);
                       
                       if (isHit && Math.abs((target.pos.y - 35) - startY) < 50) {
-                          target.health = 0;
-                          target.isDead = true;
-                          target.isLoser = true;
+                          // 数值结算：伤害来自武器库（原版是一击必杀，现改为可调的高伤狙击）
+                          target.health -= laserSt.damage;
                           target.vel.x = entity.facingRight ? 50 : -50;
                           target.vel.y = -30;
-                          
+                          target.stunFrames = 30;
+
                           playExplodeSound();
                           spawnParticles(target.pos.x, target.pos.y - 35, '#ff0000', 30, 15);
-                          triggerWin(entity.id);
+
+                          if (target.health <= 0) {
+                              target.health = 0;
+                              target.isDead = true;
+                              target.isLoser = true;
+                              triggerWin(entity.id);
+                          }
                       }
                   }
               });
@@ -3118,6 +3298,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           } else if (entity.heldWeapon === 'zeperion') {
               // === 哉佩利敖光线逻辑 ===
               playShootSound();
+              const zeperionSt = getBuiltinStats('zeperion');
               shakeRef.current = 30; // 屏幕抖动更剧烈
               
               const beamLength = 2000;
@@ -3133,7 +3314,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                           : (target.pos.x < startX && target.pos.x > endX);
                       
                       if (isHit && Math.abs((target.pos.y - 35) - startY) < 60) {
-                          target.health -= 40; // 高伤害
+                          target.health -= zeperionSt.damage; // 高伤害，数值来自武器库
                           
                           // 击中特效：橘黄色光球从小变大，爆炸，满天星火
                           projectilesRef.current.push({
@@ -3175,6 +3356,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
               } else {
                   // 埋设：向面前抛出一块 C4（埋设同样消耗 1 发弹药，避免无限埋雷）
                   playShootSound();
+                  const c4St = getBuiltinStats('c4');
                   projectilesRef.current.push({
                       id: Math.random().toString(36).slice(2) + Date.now(),
                       type: 'c4',
@@ -3182,13 +3364,16 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                       vel: { x: entity.facingRight ? 6 : -6, y: -7 },
                       ownerId: entity.id,
                       width: 20, height: 12, active: true,
-                      c4State: 'flying'
+                      c4State: 'flying',
+                      damage: c4St.damage,
+                      blastRadius: c4St.blastRadius
                   });
                   entity.ammo--;
               }
           } else if (entity.heldWeapon === 'piercer') {
               // == 穿地弹：抛出后钻入地下，潜行追踪并破土引爆 ==
               playShootSound();
+              const piercerSt = getBuiltinStats('piercer');
               entity.vel.x += entity.facingRight ? -6 : 6;
               projectilesRef.current.push({
                   id: Math.random().toString(),
@@ -3199,13 +3384,16 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                   width: 20, height: 8, active: true,
                   piercerState: 'flying',
                   piercerDir: entity.facingRight ? 1 : -1,
-                  piercerTimer: 0
+                  piercerTimer: 0,
+                  damage: piercerSt.damage,
+                  blastRadius: piercerSt.blastRadius
               });
               entity.ammo--;
           } else if (entity.heldWeapon === 'aug') {
               // == AUG 突击步枪：高速连发 ==
               playShootSound();
-              entity.attackCooldown = 8; // 高射速
+              const augSt = getBuiltinStats('aug');
+              entity.attackCooldown = augSt.cooldown ?? 8; // 高射速
               entity.vel.x += entity.facingRight ? -3 : 3; // 后坐力
               const mx = entity.pos.x + (entity.facingRight ? 30 : -30);
               const my = entity.pos.y - 42;
@@ -3213,9 +3401,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                   id: Math.random().toString(),
                   type: 'aug',
                   pos: { x: mx, y: my },
-                  vel: { x: entity.facingRight ? 22 : -22, y: 0 },
+                  vel: { x: augSt.bulletSpeed ? (entity.facingRight ? augSt.bulletSpeed : -augSt.bulletSpeed) : (entity.facingRight ? 22 : -22), y: 0 },
                   ownerId: entity.id,
                   width: 4, height: 3, active: true,
+                  damage: augSt.damage,
                   trail: []
               });
               spawnParticles(mx, my, '#ffe28a', 3, 3, 0.3, 2); // 枪口火光
@@ -3223,6 +3412,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           } else if (entity.heldWeapon === 'gas') {
               // == 毒气弹：投掷，落地后形成持续 5 秒的毒气区域 ==
               playShootSound();
+              const gasSt = getBuiltinStats('gas');
               entity.vel.x += entity.facingRight ? -4 : 4;
               projectilesRef.current.push({
                   id: Math.random().toString(),
@@ -3233,23 +3423,28 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                   width: 16, height: 16, active: true,
                   gasState: 'flying',
                   gasTimer: 0,
-                  gasRadius: 0
+                  gasRadius: 0,
+                  damage: gasSt.damage,
+                  blastRadius: gasSt.blastRadius
               });
               entity.ammo--;
           } else if (entity.heldWeapon === 'gatling') {
               // == 加特林：射速是 AUG 的两倍，弹道带轻微散射，单发伤害低 ==
               playShootSound();
-              entity.attackCooldown = 4;
+              const gatlingSt = getBuiltinStats('gatling');
+              entity.attackCooldown = gatlingSt.cooldown ?? 4;
               entity.vel.x += entity.facingRight ? -2 : 2; // 后坐力比 AUG 小（单手压得住）
               const mx = entity.pos.x + (entity.facingRight ? 34 : -34);
               const my = entity.pos.y - 42;
+              const gatlingSpeed = gatlingSt.bulletSpeed ?? 20;
               projectilesRef.current.push({
                   id: Math.random().toString(),
                   type: 'gatling',
                   pos: { x: mx, y: my },
-                  vel: { x: entity.facingRight ? 20 : -20, y: (Math.random() - 0.5) * 2.4 }, // 散射
+                  vel: { x: entity.facingRight ? gatlingSpeed : -gatlingSpeed, y: (Math.random() - 0.5) * 2.4 }, // 散射
                   ownerId: entity.id,
                   width: 4, height: 3, active: true,
+                  damage: gatlingSt.damage,
                   trail: []
               });
               spawnParticles(mx, my, '#ffd23a', 3, 3, 0.3, 2); // 枪口火光
@@ -3303,7 +3498,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
               let hitEffectSize = 12;
 
               if (entity.heldWeapon === 'sword') {
-                  range = 140; dmg = 15; knockbackX = 12; selfPush = 12; entity.attackCooldown = 20;
+                  const swordSt = getBuiltinStats('sword');
+                  range = swordSt.range ?? 140;
+                  dmg = swordSt.damage;
+                  knockbackX = swordSt.knockback ?? 12;
+                  selfPush = 12;
+                  entity.attackCooldown = swordSt.cooldown ?? 20;
               }
               // 自创·近战挥砍：复用整套近战判定，只换数值
               if (customW && customW.template === 'melee') {
@@ -3462,6 +3662,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           drawOceanBackground(ctx, canvas.width, canvas.height, frameRef.current);
       } else if (map === 'volcano') {
           drawVolcanoBackground(ctx, canvas.width, canvas.height, frameRef.current);
+      } else if (map === 'night') {
+          drawNightBackground(ctx, canvas.width, canvas.height, frameRef.current);
       } else {
           drawNeonBackground(ctx, canvas.width, canvas.height, frameRef.current);
       }
@@ -3555,6 +3757,30 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
               ctx.lineTo(x - wob * 0.2, GROUND_Y + 22);
               ctx.stroke();
           }
+      } else if (map === 'night') {
+          // 夜色草地：月光照出的冷绿，比白天森林暗一档
+          ctx.fillStyle = '#1e3b2a';
+          ctx.fillRect(0, GROUND_Y - 4, canvas.width, 10);
+          ctx.fillStyle = '#16301f';
+          ctx.fillRect(0, GROUND_Y + 6, canvas.width, 16);
+          // 草丛（月光色描一下顶）
+          ctx.fillStyle = '#274d33';
+          for (let x = 0; x < canvas.width; x += 26) {
+              const gx = x + ((x / 26) % 2) * 8;
+              const gh = 5 + ((x * 7) % 6);
+              ctx.fillRect(gx, GROUND_Y - gh, 3, gh);
+          }
+          // 土壤
+          ctx.fillStyle = '#26243c';
+          ctx.fillRect(0, GROUND_Y + 22, canvas.width, canvas.height - GROUND_Y - 22);
+          ctx.fillStyle = '#1d1b30';
+          ctx.fillRect(0, GROUND_Y + 70, canvas.width, canvas.height - GROUND_Y - 70);
+          // 地平线月光辉光
+          const moonGrad = ctx.createLinearGradient(0, GROUND_Y - 36, 0, GROUND_Y + 10);
+          moonGrad.addColorStop(0, 'rgba(148, 163, 255, 0)');
+          moonGrad.addColorStop(1, 'rgba(148, 163, 255, 0.14)');
+          ctx.fillStyle = moonGrad;
+          ctx.fillRect(0, GROUND_Y - 36, canvas.width, 46);
       } else {
           ctx.fillStyle = '#1e293b';
           ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);

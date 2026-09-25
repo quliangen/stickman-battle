@@ -2,12 +2,12 @@
 
 ## 总览
 
-5 张地图（`MapType`）：`neon`（霓虹都市/星空+城市天际线）、`forest`（森林）、`desert`（沙漠）、`ocean`（海洋）、`volcano`（火山）。
+6 张地图（`MapType`）：`neon`（霓虹都市/星空+城市天际线）、`forest`（森林）、`desert`（沙漠）、`ocean`（海洋）、`volcano`（火山）、`night`（黑夜/星空+月亮+萤火虫+夜色草地）。
 
 每张地图由两部分组成：
 
 1. **平台数组常量**：`NEON_PLATFORMS` / `FOREST_PLATFORMS` / ... （[GameCanvas.tsx:521](../components/GameCanvas.tsx#L521)），类型为 `Platform { x, y, width, height }`，通过 `getPlatforms(map, canvasWidth)` 选取。常量里的坐标是 **1280 × 600 基准坐标系**下的设计值，`getPlatforms` 会按当前画布宽高自动缩放（详见 [architecture.md](architecture.md) 的"世界尺寸自适应"）。
-2. **背景绘制函数**：`drawNeonBackground`（neon 星空 + 城市天际线）/ `drawForestBackground` / `drawDesertBackground` / `drawOceanBackground` / `drawVolcanoBackground`，在 `draw()` 中按当前地图调用。
+2. **背景绘制函数**：`drawNeonBackground`（neon 星空 + 城市天际线）/ `drawForestBackground` / `drawDesertBackground` / `drawOceanBackground` / `drawVolcanoBackground` / `drawNightBackground`（黑夜），在 `draw()` 中按当前地图调用。
 
 ## 每局随机地形
 

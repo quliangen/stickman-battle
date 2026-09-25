@@ -51,13 +51,13 @@ yarn lint        # 类型检查（tsc --noEmit），提交前必跑；无测试�
 │   ├── GameCanvas.tsx                   # ★ 核心：约 4000 行游戏引擎，几乎所有玩法改动在此
 │   ├── GameUI.tsx                       # 战斗 HUD
 │   ├── MainMenu.tsx                     # 主菜单（模式/地图选择 + 武器库入口）
-│   ├── WeaponArsenal.tsx                # 武器库（内置启停 + 自创武器增改删）
+│   ├── WeaponArsenal.tsx                # 武器库（内置启停 + 内置数值「调一调」 + 自创武器增改删）
 │   ├── GameOver.tsx                     # 结算
 │   └── BurnoutCard.tsx                  # 「版本燃尽」提示卡（文案只在这里维护）
 ├── services/
 │   ├── audioService.ts                  # Web Audio 程序化音效
 │   ├── progressService.ts               # 版本进度存档（localStorage，带版本门）
-│   └── weaponService.ts                 # 武器库存档（localStorage，跨版本保留）
+│   └── weaponService.ts                 # 武器库存档（localStorage，跨版本保留）+ 内置武器数值层（BUILTIN_STATS / overrides / 调一调）
 └── docs/                                # 详细文档（见下）
 ```
 

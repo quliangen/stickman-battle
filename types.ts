@@ -7,7 +7,7 @@ export enum GameState {
 
 export type GameMode = 'PVE' | 'PVP';
 
-export type MapType = 'neon' | 'forest' | 'desert' | 'ocean' | 'volcano';
+export type MapType = 'neon' | 'forest' | 'desert' | 'ocean' | 'volcano' | 'night';
 
 export interface Vector {
   x: number;
@@ -43,6 +43,23 @@ export interface CustomWeapon {
 
 // 自创武器 id：'cw_' 前缀的字符串（如 cw_1719123456789）
 export type CustomWeaponId = `cw_${string}`;
+
+/*
+  内置武器的可调数值（武器库「调一调」）。
+  每件武器只用其中一部分字段（damage/ammo 必有），存全量方便 UI 遍历。
+  默认值在 weaponService.BUILTIN_STATS，玩家调整存 overrides。
+*/
+export interface WeaponStats {
+  damage: number;        // 单次命中伤害
+  ammo: number;          // 拾取弹药 / 耐久 / 使用次数
+  cooldown?: number;     // 攻击间隔（帧）
+  range?: number;        // 近战攻击距离
+  knockback?: number;    // 近战击退
+  bulletSpeed?: number;  // 子弹速度 px/帧
+  blastRadius?: number;  // 爆炸半径
+}
+export type WeaponStatKey = keyof WeaponStats;
+
 
 // 任何能拿在手上的武器：内置 13 种 + 自创
 export type AnyWeaponId = WeaponType | CustomWeaponId;

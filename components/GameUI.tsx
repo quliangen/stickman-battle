@@ -123,14 +123,24 @@ const GameUI: React.FC<GameUIProps> = ({ stats, players }) => {
       <div className="flex justify-between items-start">
         <FighterHUD player={players[0]} align="left" />
 
-        {/* VS & Timer */}
+        {/* VS / 波次 & Timer */}
         <div className="flex flex-col items-center pt-1">
-            <div
-                className="hud-bob text-6xl font-black italic text-transparent bg-clip-text bg-gradient-to-b from-yellow-200 via-amber-400 to-red-500 drop-shadow-[0_4px_0_rgba(0,0,0,0.35)]"
-                style={{ WebkitTextStroke: '2px white' }}
-            >
-                VS
-            </div>
+            {stats.mode === 'COOP' ? (
+                // 双人闯关：中央显示当前关卡进度
+                <div
+                    className="hud-bob px-4 text-5xl font-black italic text-transparent bg-clip-text bg-gradient-to-b from-yellow-200 via-amber-400 to-red-500 drop-shadow-[0_4px_0_rgba(0,0,0,0.35)]"
+                    style={{ WebkitTextStroke: '2px white' }}
+                >
+                    第 {stats.wave ?? 1}/{stats.totalWaves ?? 3} 关
+                </div>
+            ) : (
+                <div
+                    className="hud-bob text-6xl font-black italic text-transparent bg-clip-text bg-gradient-to-b from-yellow-200 via-amber-400 to-red-500 drop-shadow-[0_4px_0_rgba(0,0,0,0.35)]"
+                    style={{ WebkitTextStroke: '2px white' }}
+                >
+                    VS
+                </div>
+            )}
             {/* 同上：计时器药丸去掉 backdrop-blur-md，靠底色 + 边框 + 阴影撑观感 */}
             <div className="mt-2 px-6 py-1.5 bg-slate-900/45 border-4 border-white rounded-full shadow-lg">
                 <span className="text-white font-black text-2xl tabular-nums drop-shadow-md">
@@ -138,7 +148,7 @@ const GameUI: React.FC<GameUIProps> = ({ stats, players }) => {
                 </span>
             </div>
             <div className="mt-2 px-4 py-0.5 bg-white/20 border-2 border-white/60 rounded-full font-body text-sm font-bold text-white">
-              {stats.mode === 'PVP' ? '双人对战' : '单人闯关'}
+              {stats.mode === 'PVP' ? '双人对战' : stats.mode === 'COOP' ? '双人闯关' : '单人闯关'}
             </div>
         </div>
 

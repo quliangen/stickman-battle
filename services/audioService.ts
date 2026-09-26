@@ -205,3 +205,53 @@ export const playDragonRoar = () => {
 
     } catch (e) { }
 };
+
+/*
+  喷气背包持续声：循环噪声 + 带通滤波，听感像"嘶——"的气流。
+  用引用计数：两个玩家同时喷气时只开一条声轨，谁先松手都不关，
+  最后一人停止时才淡出。start/stop 必须成对调用。
+*/
+let jetNodes: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
+let jetRefCount = 0;
+
+export const startJetSound = () => {
+    jetRefCount++;
+    if (jetNodes) return;
+    try {
+        const ctx = getContext();
+        if (ctx.state === 'suspended') ctx.resume();
+
+        const src = ctx.createBufferSource();
+        src.buffer = getNoiseBuffer(ctx);
+        src.loop = true;
+
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.value = 900;
+        filter.Q.value = 0.6;
+
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.16, ctx.currentTime + 0.08);
+
+        src.connect(filter);
+        filter.connect(gain);
+        gain.connect(ctx.destination);
+        src.start();
+        jetNodes = { src, gain };
+    } catch (e) { }
+};
+
+export const stopJetSound = () => {
+    jetRefCount = Math.max(0, jetRefCount - 1);
+    if (jetRefCount > 0 || !jetNodes) return;
+    try {
+        const ctx = getContext();
+        const { src, gain } = jetNodes;
+        gain.gain.cancelScheduledValues(ctx.currentTime);
+        gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.1);
+        src.stop(ctx.currentTime + 0.12);
+    } catch (e) { }
+    jetNodes = null;
+};

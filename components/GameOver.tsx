@@ -37,13 +37,20 @@ const GameOver: React.FC<GameOverProps> = ({ stats, onRestart, onMenu, progress,
 
   const restartEnabled = canRestart && !exhausted;
 
-  const isDraw = stats.winner !== 'P1' && stats.winner !== 'P2';
-  const winnerText = isDraw ? '平局！' : (stats.winner === 'P1' ? '蓝方 胜利！' : '黄方 胜利！');
-  // 胜利标题按阵营着色：蓝方蓝金、黄方橙金、平局紫粉
-  const winnerGradient = isDraw
-    ? 'from-fuchsia-300 to-violet-700'
-    : (stats.winner === 'P1' ? 'from-sky-300 to-blue-700' : 'from-amber-200 to-orange-600');
-  const winnerBadge = isDraw ? '🤝' : '🏆';
+  // 双人闯关：胜者只有"全员通关"与"全军覆没"两种结果，不走 P1/P2 判定
+  const isCoop = stats.mode === 'COOP';
+  const coopWin = isCoop && stats.winner === 'PLAYERS';
+  const isDraw = !isCoop && stats.winner !== 'P1' && stats.winner !== 'P2';
+  const winnerText = isCoop
+    ? (coopWin ? '闯关成功！' : '闯关失败…')
+    : (isDraw ? '平局！' : (stats.winner === 'P1' ? '蓝方 胜利！' : '黄方 胜利！'));
+  // 胜利标题按阵营着色：蓝方蓝金、黄方橙金、平局紫粉、通关金红、失败灰蓝
+  const winnerGradient = isCoop
+    ? (coopWin ? 'from-amber-200 to-orange-600' : 'from-slate-300 to-slate-600')
+    : (isDraw
+      ? 'from-fuchsia-300 to-violet-700'
+      : (stats.winner === 'P1' ? 'from-sky-300 to-blue-700' : 'from-amber-200 to-orange-600'));
+  const winnerBadge = isCoop ? (coopWin ? '🏆' : '💦') : (isDraw ? '🤝' : '🏆');
 
   return (
     <motion.div
@@ -115,8 +122,15 @@ const GameOver: React.FC<GameOverProps> = ({ stats, onRestart, onMenu, progress,
         </div>
         <div className="min-w-[8rem] bg-white/20 border-4 border-white/70 rounded-2xl px-6 py-3 text-center backdrop-blur-sm shadow-lg">
           <div className="font-body text-sm font-bold text-white/80">游戏模式</div>
-          <div className="text-3xl font-black">{stats.mode === 'PVP' ? '双人' : '单人'}</div>
+          <div className="text-3xl font-black">{stats.mode === 'PVP' ? '双人' : stats.mode === 'COOP' ? '双人闯关' : '单人'}</div>
         </div>
+        {/* 双人闯关：显示到达的关卡 */}
+        {isCoop && (
+          <div className="min-w-[8rem] bg-white/20 border-4 border-white/70 rounded-2xl px-6 py-3 text-center backdrop-blur-sm shadow-lg">
+            <div className="font-body text-sm font-bold text-white/80">到达关卡</div>
+            <div className="text-3xl font-black tabular-nums">{stats.wave ?? 1} / {stats.totalWaves ?? 3}</div>
+          </div>
+        )}
       </motion.div>
 
       {/* 版本燃尽提示：玩满 PLAYS_PER_VERSION 局后出现，同时锁住"再玩一局" */}

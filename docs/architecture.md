@@ -9,7 +9,7 @@ GameCanvas (z-10, 始终挂载) → GameUI (z-20, 战斗中) → MainMenu / Game
 MainMenu 是**三栏布局**：游戏模式居左、选择地图居中、操作提示居右（窄于 `lg` 时自动堆叠成一列）。
 三栏共用一个 `MenuCard` 外壳，卡片标题用白底药丸——卡片本身是半透明白，纯白字在浅色天空上几乎看不清。
 
-游戏状态由 `GameState` 枚举驱动：`MENU → PLAYING → VICTORY_ANIMATION → GAME_OVER`。模式为 `'PVE'`（对 AI）或 `'PVP'`（双人同屏）。
+游戏状态由 `GameState` 枚举驱动：`MENU → PLAYING → VICTORY_ANIMATION → GAME_OVER`。模式为 `'PVE'`（对 AI）、`'PVP'`（双人同屏）或 `'COOP'`（双人闯关：波次刷怪连闯 3 关，怪物 2→3→4 只、血量递增，玩家同阵营免伤，全灭判负、通关第三关判胜）。
 
 注意：`GameCanvas` 始终挂载，菜单界面也在后台跑循环渲染背景——不要在 `PLAYING` 之外的状态执行消耗性逻辑，`update()` 内已有按状态的早退分支，新增逻辑时注意位置。
 
@@ -61,9 +61,9 @@ MainMenu 是**三栏布局**：游戏模式居左、选择地图居中、操作�
 - **不要动画 `width` / `height` / `top` / `left`**——这些属性会触发 layout + paint。进度条一律用 `transform: scaleX()`（外层容器负责圆角裁切，避免缩放把圆角压扁）。
 - `GameCanvas` 与 `GameUI` 都用 `React.memo` 包裹，配合"值没变就不 setState"，避免父组件重渲染时连带重建整个游戏循环的闭包。
 
-## AI（PVE 模式）
+## AI（PVE / COOP 模式）
 
-playerIndex 1 的实体由 `update()` 内的 AI 分支控制（寻路、捡武器、攻击）；PVP 时同一实体改由方向键控制。键位：P1 = WASD + 空格，P2 = 方向键 + 回车；游戏结束后可按 R 快捷重开（受防沉迷约束）。
+AI 决策在组件级 `aiDecide()`（输出 moveLeft/right、jump、crouch、attack 的"按键意图"，移动与起跳仍由主循环统一执行）：追踪最近的敌对目标、优先捡掉落物、跳跃越障、喷气追高、按武器射程攻击。单人模式下 playerIndex 1 的 P2 由它控制；COOP 模式下 `team: 'enemy'` 的怪物（playerIndex ≥ 2，不读键盘）也由它控制。PVP / COOP 时 P2 改由方向键控制。敌我判定统一走 `isHostile`（非 COOP 全员互敌，COOP 按阵营），伤害入口统一过 `canDamage`（COOP 同阵营免伤），追踪弹目标用 `findEnemy`（按阵营找最近敌人）。键位：P1 = WASD + 空格，P2 = 方向键 + 回车；游戏结束后可按 R 快捷重开（受防沉迷约束）。
 
 ## 防沉迷：版本燃尽
 

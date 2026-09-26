@@ -5,9 +5,9 @@ export enum GameState {
   VICTORY_ANIMATION
 }
 
-export type GameMode = 'PVE' | 'PVP';
+export type GameMode = 'PVE' | 'PVP' | 'COOP';
 
-export type MapType = 'neon' | 'forest' | 'desert' | 'ocean' | 'volcano' | 'night' | 'snow' | 'prairie' | 'glacier' | 'space';
+export type MapType = 'neon' | 'forest' | 'desert' | 'ocean' | 'volcano' | 'night' | 'snow' | 'prairie' | 'glacier' | 'space' | 'village';
 
 export interface Vector {
   x: number;
@@ -116,11 +116,17 @@ export interface Entity {
   weaponDuration: number; // 新增：武器剩余存在时间 (帧)
   stunFrames: number; // 受击硬直/击飞状态
   spikeCooldown: number; // 踩到陷阱后的无敌帧，避免站在尖刺上被瞬间抽干血
+  jetpackFuel: number; // 喷气背包剩余燃料（帧）；0 = 没背包
+  jetThrusting: boolean; // 瞬态：本帧是否正在喷气（只供绘制读，不参与存档）
+  team: 'player' | 'enemy'; // 阵营：玩家（p1/p2 同队）与敌人（COOP 模式刷出的怪）
 }
+
+// 天上掉落的东西：武器 + 道具（喷气背包）
+export type ItemKind = AnyWeaponId | 'jetpack';
 
 export interface FallingItem {
   id: string;
-  type: AnyWeaponId;
+  type: ItemKind;
   pos: Vector;
   vel: Vector;
   width: number;
@@ -206,4 +212,7 @@ export interface GameStats {
   winner: string | null;
   mode: GameMode;
   duration: number;
+  // COOP 闯关专用：当前波次 / 总波次（其它模式不填）
+  wave?: number;
+  totalWaves?: number;
 }

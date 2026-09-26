@@ -28,6 +28,7 @@ const MAPS: { id: MapType; name: string; icon: string; active: string; ring: str
   { id: 'prairie', name: '草原', icon: '🌾', active: 'from-lime-500 to-green-500 shadow-lime-700', ring: 'border-lime-200' },
   { id: 'glacier', name: '冰川', icon: '🧊', active: 'from-cyan-500 to-teal-500 shadow-cyan-700', ring: 'border-teal-200' },
   { id: 'space', name: '太空', icon: '🪐', active: 'from-fuchsia-500 to-purple-600 shadow-fuchsia-700', ring: 'border-fuchsia-200' },
+  { id: 'village', name: '村庄', icon: '🏡', active: 'from-orange-400 to-amber-500 shadow-orange-700', ring: 'border-orange-200' },
 ];
 
 // 首页天空装饰配置：云朵都从右往左慢慢飘（负 delay 让打开页面时它们已经散开），
@@ -172,13 +173,15 @@ const KeyCap: React.FC<{ children: React.ReactNode; wide?: boolean }> = ({ child
 const KidButton: React.FC<{
   onClick: () => void;
   disabled?: boolean;
-  color: 'blue' | 'yellow';
+  color: 'blue' | 'yellow' | 'red';
   children: React.ReactNode;
   subText: string;
   icon: string;
 }> = ({ onClick, disabled, color, children, subText, icon }) => {
   const palette = color === 'blue'
     ? 'from-sky-400 to-blue-600 border-blue-200 shadow-blue-900/40'
+    : color === 'red'
+    ? 'from-rose-400 to-red-600 border-red-200 shadow-red-900/40'
     : 'from-amber-300 to-yellow-500 border-yellow-200 shadow-yellow-900/40';
 
   return (
@@ -389,37 +392,12 @@ const MainMenu: React.FC<MainMenuProps> = ({ setGameState, setGameMode, map, set
           </motion.div>
         )}
 
-        {/* 三栏：游戏模式（居左）/ 选择地图（居中）/ 操作提示（居右）
+        {/* 三栏：选择地图（居左）/ 游戏模式（居中）/ 操作提示与武器库（居右）
             窗口窄于 lg 时自动堆叠成一列，避免按钮被挤扁。 */}
         <div className="w-full grid grid-cols-1 lg:grid-cols-3 gap-5 items-stretch">
 
-          {/* 左：游戏模式 */}
-          <MenuCard icon="🎮" title="游戏模式" delay={0.25}>
-            <div className="flex flex-col gap-3 flex-1 justify-center">
-              <KidButton
-                color="blue"
-                icon="🤖"
-                disabled={exhausted}
-                subText={exhausted ? '先去升级版本，回来就能玩啦' : '一个人玩，打败电脑！'}
-                onClick={() => startGame('PVE')}
-              >
-                单人闯关
-              </KidButton>
-
-              <KidButton
-                color="yellow"
-                icon="🧑‍🤝‍🧑"
-                disabled={exhausted}
-                subText={exhausted ? '先去升级版本，回来就能玩啦' : '和小伙伴一起玩！'}
-                onClick={() => startGame('PVP')}
-              >
-                双人对战
-              </KidButton>
-            </div>
-          </MenuCard>
-
-          {/* 中：选择地图 */}
-          <MenuCard icon="🗺️" title="选择地图" delay={0.35}>
+          {/* 左：选择地图 */}
+          <MenuCard icon="🗺️" title="选择地图" delay={0.25}>
             {/* 地图自动换行排布，最后一行居中 */}
             <div className="flex flex-wrap justify-center content-center gap-2 flex-1">
               {MAPS.map(m => {
@@ -443,7 +421,42 @@ const MainMenu: React.FC<MainMenuProps> = ({ setGameState, setGameMode, map, set
             </div>
           </MenuCard>
 
-          {/* 右：操作提示 */}
+          {/* 中：游戏模式 */}
+          <MenuCard icon="🎮" title="游戏模式" delay={0.35}>
+            <div className="flex flex-col gap-3 flex-1 justify-center">
+              <KidButton
+                color="blue"
+                icon="🤖"
+                disabled={exhausted}
+                subText={exhausted ? '先去升级版本，回来就能玩啦' : '一个人玩，打败电脑！'}
+                onClick={() => startGame('PVE')}
+              >
+                单人闯关
+              </KidButton>
+
+              <KidButton
+                color="yellow"
+                icon="🧑‍🤝‍🧑"
+                disabled={exhausted}
+                subText={exhausted ? '先去升级版本，回来就能玩啦' : '和小伙伴一起玩！'}
+                onClick={() => startGame('PVP')}
+              >
+                双人对战
+              </KidButton>
+
+              <KidButton
+                color="red"
+                icon="👾"
+                disabled={exhausted}
+                subText={exhausted ? '先去升级版本，回来就能玩啦' : '两人组队，连闯 3 关打怪兽！'}
+                onClick={() => startGame('COOP')}
+              >
+                双人闯关
+              </KidButton>
+            </div>
+          </MenuCard>
+
+          {/* 右：操作提示 与 武器库 */}
           <MenuCard icon="⌨️" title="操作提示" delay={0.45}>
             <div className="flex flex-col gap-3 flex-1 justify-center">
               <div className="flex flex-col items-center gap-1.5">
@@ -467,25 +480,25 @@ const MainMenu: React.FC<MainMenuProps> = ({ setGameState, setGameMode, map, set
                 </div>
                 <span className="text-sm font-bold text-white/90 drop-shadow-md">回车 攻击</span>
               </div>
+
+              {/* 武器库入口：管理天上掉的武器 + 做自创武器 */}
+              <motion.button
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.55 }}
+                whileHover={{ scale: 1.04, y: -2 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => setShowArsenal(true)}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-2xl border-4 border-white/70
+                  bg-gradient-to-b from-violet-400 to-purple-600 px-4 py-2
+                  text-xl font-black text-white tracking-wider
+                  shadow-[0_6px_0_0_rgba(0,0,0,0.25)]"
+              >
+                🧰 武器库
+              </motion.button>
             </div>
           </MenuCard>
         </div>
-
-        {/* 武器库入口：管理天上掉的武器 + 做自创武器 */}
-        <motion.button
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.55 }}
-          whileHover={{ scale: 1.05, y: -3 }}
-          whileTap={{ scale: 0.95 }}
-          onClick={() => setShowArsenal(true)}
-          className="inline-flex items-center gap-2 rounded-2xl border-4 border-white/70
-            bg-gradient-to-b from-violet-400 to-purple-600 px-8 py-3
-            text-2xl font-black text-white tracking-wider
-            shadow-[0_8px_0_0_rgba(0,0,0,0.25)]"
-        >
-          🧰 武器库
-        </motion.button>
         </div>
       </div>
 

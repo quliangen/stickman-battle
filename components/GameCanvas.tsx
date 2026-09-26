@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useCallback } from 'react';
-import { GameState, Entity, Vector, Particle, GameStats, GameMode, MapType, FallingItem, Projectile, WeaponType, Platform, Obstacle, AnyWeaponId } from '../types';
-import { playJumpSound, playAttackSound, playHitSound, playShootSound, playExplodeSound, playDragonRoar } from '../services/audioService';
+import { GameState, Entity, Vector, Particle, GameStats, GameMode, MapType, FallingItem, Projectile, WeaponType, Platform, Obstacle, AnyWeaponId, ItemKind } from '../types';
+import { playJumpSound, playAttackSound, playHitSound, playShootSound, playExplodeSound, playDragonRoar, startJetSound, stopJetSound } from '../services/audioService';
 import { getDropPool, getCustom, getBuiltinStats, isBuiltinDisabled, isCustomId } from '../services/weaponService';
 
 interface GameCanvasProps {
@@ -1627,11 +1627,243 @@ const drawSpaceBackground = (
     }
 };
 
+// === 村庄背景 ===
+/*
+  田园村庄：暖蓝天空 + 太阳 + 飘云 + 远山丘陵 + 一排烟囱冒烟的木屋 +
+  白色尖桩栅栏 + 走来走去的母鸡 + 远处掠过的小鸟。主打"阳光明媚的小村子"。
+*/
+const drawVillageBackground = (
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    frame: number
+) => {
+    // 1. 暖蓝天空：天顶清爽，靠地平线泛暖黄（正午的阳光感）
+    const sky = ctx.createLinearGradient(0, 0, 0, h);
+    sky.addColorStop(0, '#7ec8f2');
+    sky.addColorStop(0.55, '#a8dcf5');
+    sky.addColorStop(1, '#fdf3d0');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, h);
+
+    // 2. 太阳：左上角一团柔光
+    const sunX = w * 0.14, sunY = h * 0.16, sunR = Math.min(w, h) * 0.06;
+    const glow = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunR * 3.2);
+    glow.addColorStop(0, 'rgba(255, 244, 180, 0.9)');
+    glow.addColorStop(0.4, 'rgba(255, 236, 140, 0.35)');
+    glow.addColorStop(1, 'rgba(255, 236, 140, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(sunX - sunR * 3.2, sunY - sunR * 3.2, sunR * 6.4, sunR * 6.4);
+    ctx.fillStyle = '#fff3ae';
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 3. 白云：从右往左慢慢飘，飘出屏再从右回来
+    const clouds: Array<[number, number, number, number]> = [
+        [0.18, 0.22, 34, 0.5], [0.5, 0.12, 26, 0.36], [0.78, 0.3, 30, 0.42], [0.35, 0.4, 20, 0.28],
+    ];
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    clouds.forEach(([cx, cy, cr, speed], i) => {
+        const x = ((w + cr * 3 - ((frame * speed + i * 260) % (w + cr * 6))) + (w + cr * 6)) % (w + cr * 6) - cr * 3;
+        const y = cy * h + Math.sin(frame * 0.01 + i * 2) * 4;
+        ctx.beginPath();
+        ctx.arc(x, y, cr, 0, Math.PI * 2);
+        ctx.arc(x + cr * 0.9, y - cr * 0.35, cr * 0.75, 0, Math.PI * 2);
+        ctx.arc(x - cr * 0.9, y + cr * 0.1, cr * 0.65, 0, Math.PI * 2);
+        ctx.arc(x + cr * 0.2, y + cr * 0.3, cr * 0.7, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    // 4. 远山丘陵：两叠淡青绿圆弧
+    const hills = [
+        { y: 0.64, r: 0.16, c: '#c5e3c8' },
+        { y: 0.68, r: 0.11, c: '#a3d2a4' },
+    ];
+    hills.forEach(hill => {
+        ctx.fillStyle = hill.c;
+        ctx.beginPath();
+        ctx.moveTo(0, h);
+        for (let x = 0; x <= w + 60; x += 60) {
+            ctx.lineTo(x, h * hill.y - Math.abs(Math.sin(x * 0.004 + hill.y * 9)) * h * hill.r);
+        }
+        ctx.lineTo(w, h);
+        ctx.closePath();
+        ctx.fill();
+    });
+
+    // 5. 远景小树林：一排深浅不一的绿团
+    ctx.fillStyle = '#7ab86c';
+    for (let i = 0; i < 14; i++) {
+        const tx = ((i * 97 + 23) % 100) / 100 * w;
+        const tr = 14 + (i * 13 % 10);
+        const ty = h * 0.725;
+        ctx.beginPath();
+        ctx.arc(tx, ty, tr, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillRect(tx - 2, ty, 4, 14);
+    }
+
+    // 6. 一排村庄小屋：红顶 / 棕顶轮流来，烟囱慢悠悠冒烟圈
+    const horizon = h * 0.78;
+    const houses = [
+        { x: 0.06, w: 0.14, hh: 0.14, roof: '#c94f43', wall: '#e8d5ae' },
+        { x: 0.3, w: 0.12, hh: 0.12, roof: '#8a5a30', wall: '#f2e4c0' },
+        { x: 0.58, w: 0.15, hh: 0.15, roof: '#b8452f', wall: '#e8d5ae' },
+        { x: 0.85, w: 0.12, hh: 0.125, roof: '#7a4a26', wall: '#f2e4c0' },
+    ];
+    houses.forEach((hd, i) => {
+        const hx = hd.x * w;
+        const hw = hd.w * w;
+        const hh = hd.hh * h;
+        const hy = horizon - hh;
+        // 墙体 + 木板纹
+        ctx.fillStyle = hd.wall;
+        ctx.fillRect(hx, hy + hh * 0.32, hw, hh * 0.68);
+        ctx.strokeStyle = 'rgba(140, 100, 60, 0.25)';
+        ctx.lineWidth = 1;
+        for (let k = 1; k < 4; k++) {
+            ctx.beginPath();
+            ctx.moveTo(hx, hy + hh * 0.32 + (hh * 0.68 * k) / 4);
+            ctx.lineTo(hx + hw, hy + hh * 0.32 + (hh * 0.68 * k) / 4);
+            ctx.stroke();
+        }
+        // 三角屋顶（盖出一点屋檐）
+        ctx.fillStyle = hd.roof;
+        ctx.beginPath();
+        ctx.moveTo(hx - hw * 0.06, hy + hh * 0.36);
+        ctx.lineTo(hx + hw * 0.5, hy - hh * 0.1);
+        ctx.lineTo(hx + hw * 1.06, hy + hh * 0.36);
+        ctx.closePath();
+        ctx.fill();
+        // 屋脊亮边
+        ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+        ctx.beginPath();
+        ctx.moveTo(hx + hw * 0.5, hy - hh * 0.1);
+        ctx.lineTo(hx + hw * 1.0, hy + hh * 0.35);
+        ctx.stroke();
+        // 门
+        ctx.fillStyle = '#6b4a2b';
+        ctx.fillRect(hx + hw * 0.42, hy + hh * 0.62, hw * 0.16, hh * 0.38);
+        // 暖黄光的窗
+        ctx.fillStyle = '#ffd873';
+        ctx.fillRect(hx + hw * 0.12, hy + hh * 0.5, hw * 0.16, hh * 0.2);
+        ctx.fillRect(hx + hw * 0.72, hy + hh * 0.5, hw * 0.16, hh * 0.2);
+        // 烟囱 + 烟圈：每座屋错开相位，烟圈边升边散
+        const chimneyX = hx + hw * 0.78;
+        const chimneyY = hy - hh * 0.06;
+        ctx.fillStyle = '#9a6a44';
+        ctx.fillRect(chimneyX, chimneyY, hw * 0.1, hh * 0.22);
+        for (let k = 0; k < 3; k++) {
+            const t = ((frame * 0.6 + i * 90 + k * 60) % 180) / 180;
+            const smokeY = chimneyY - t * h * 0.12;
+            const smokeX = chimneyX + hw * 0.05 + Math.sin(t * 5 + k) * 6;
+            ctx.fillStyle = `rgba(240, 240, 240, ${0.5 * (1 - t)})`;
+            ctx.beginPath();
+            ctx.arc(smokeX, smokeY, 4 + t * 8, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    });
+
+    // 7. 白色尖桩栅栏：地平线上一排，画在小屋前面
+    ctx.fillStyle = '#fdfdf8';
+    const fenceY = horizon + h * 0.008;
+    for (let x = 0; x < w; x += 34) {
+        ctx.fillRect(x + 6, fenceY - 22, 8, 24); // 尖桩
+        ctx.beginPath(); // 桩头斜尖
+        ctx.moveTo(x + 6, fenceY - 22);
+        ctx.lineTo(x + 10, fenceY - 30);
+        ctx.lineTo(x + 14, fenceY - 22);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillRect(x - 12, fenceY - 16, 48, 4); // 横杆
+    }
+
+    // 8. 母鸡散步：在栅栏前来回踱步，走一段掉个头
+    const hens = [
+        { baseX: 0.24, phase: 0 },
+        { baseX: 0.68, phase: 2.4 },
+    ];
+    hens.forEach(hen => {
+        const swing = Math.sin(frame * 0.008 + hen.phase);
+        const hx = hen.baseX * w + swing * w * 0.06;
+        const hy = horizon + h * 0.055;
+        const dir = swing > 0 ? 1 : -1;
+        const bob = Math.abs(Math.sin(frame * 0.15 + hen.phase)) * 2;
+        ctx.save();
+        ctx.translate(hx, hy - bob);
+        ctx.scale(dir, 1);
+        // 身体 + 尾巴
+        ctx.fillStyle = '#f8f8f2';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 11, 8, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(-10, -4, 4, 3, -0.5, 0, Math.PI * 2);
+        ctx.fill();
+        // 头 + 鸡冠
+        ctx.beginPath();
+        ctx.arc(9, -7, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#e04f3f';
+        ctx.beginPath();
+        ctx.arc(9, -12, 2.4, 0, Math.PI * 2);
+        ctx.fill();
+        // 喙
+        ctx.fillStyle = '#f5a623';
+        ctx.beginPath();
+        ctx.moveTo(13, -7);
+        ctx.lineTo(17, -6);
+        ctx.lineTo(13, -4.5);
+        ctx.closePath();
+        ctx.fill();
+        // 小细腿
+        ctx.strokeStyle = '#e8a13d';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(-2, 7);
+        ctx.lineTo(-2, 12);
+        ctx.moveTo(3, 7);
+        ctx.lineTo(3, 12);
+        ctx.stroke();
+        ctx.restore();
+    });
+
+    // 9. 远处掠过的小鸟：V 形翅膀一扇一扇
+    ctx.strokeStyle = 'rgba(90, 90, 110, 0.55)';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+        const bx = ((w + 40 - (frame * (0.9 + i * 0.2) + i * 340) % (w + 80)) + (w + 80)) % (w + 80) - 40;
+        const by = h * (0.14 + i * 0.07) + Math.sin(frame * 0.03 + i * 2) * 8;
+        const flap = Math.sin(frame * 0.2 + i * 1.7) * 4;
+        ctx.beginPath();
+        ctx.moveTo(bx - 9, by - flap);
+        ctx.quadraticCurveTo(bx - 3, by + 3, bx, by);
+        ctx.quadraticCurveTo(bx + 3, by + 3, bx + 9, by - flap);
+        ctx.stroke();
+    }
+};
+
 // === 物理参数 (提速版) ===
 const GRAVITY = 0.8;
 const FRICTION = 0.82;
 const MOVE_SPEED = 2.6;
 const JUMP_FORCE = -22;
+
+// === 喷气背包（掉落道具）===
+const JETPACK_MAX_FUEL = 300;   // 满燃料能持续喷 5 秒（60fps）
+const JETPACK_THRUST = 1.15;    // 每帧向上推力；GRAVITY=0.8，净升约 0.35/帧
+const JETPACK_MAX_RISE = -9;    // 喷气上升速度封顶，防止越飞越快
+const JETPACK_DROP_CHANCE = 0.25; // 普通掉落槽里出现喷气背包的概率（每局至多 1 个）
+
+// === COOP 双人闯关（波次刷怪）===
+const COOP_TOTAL_WAVES = 3;
+const COOP_WAVE_ENEMIES = [2, 3, 4];    // 每关怪物数量：2 → 3 → 4
+const COOP_WAVE_HEALTH = [60, 80, 100]; // 每关怪物血量递增，越打越硬
+const COOP_WAVE_INTERMISSION = 150;     // 关卡间隔的休息时间（帧，约 2.5 秒）
+const COOP_ENEMY_COLOR = '#ef4444'; // 怪物统一红色（和蓝/黄玩家一眼区分开）
+const COOP_ENEMY_SLOTS = [0.5, 0.72, 0.28, 0.86]; // 怪物出生点的屏幕横向比例
 
 // === 世界尺寸 ===
 // 关卡坐标以 1280x720 为基准设计，运行时按画布尺寸自适应缩放：
@@ -1671,7 +1903,7 @@ const MAX_STEPS_PER_FRAME = 5; // 单帧最多补算 5 步，避免长时间卡�
   武器耐久按 1/10 分档（配 CSS transition 补间），避免每帧都变。
 */
 const hudSignature = (players: Entity[], stats: GameStats) => {
-  let s = `${stats.winner ?? ''}|${stats.mode}|${Math.floor(stats.duration)}`;
+  let s = `${stats.winner ?? ''}|${stats.mode}|${Math.floor(stats.duration)}|${stats.wave ?? ''}`;
   for (const p of players) {
     s += `#${p.id},${Math.ceil(p.health)},${p.ammo},${p.heldWeapon ?? ''},${Math.round(p.weaponDuration / 6)},${p.isDead ? 1 : 0},${p.isWinner ? 1 : 0}`;
   }
@@ -1757,6 +1989,14 @@ const SPACE_PLATFORMS: Platform[] = [
     { x: 1010, y: 350, width: 130, height: 22 }
 ];
 
+// 村庄地图平台：木屋顶 / 木板晾台
+const VILLAGE_PLATFORMS: Platform[] = [
+    { x: 300, y: 470, width: 190, height: 22 },
+    { x: 770, y: 470, width: 190, height: 22 },
+    { x: 530, y: 290, width: 220, height: 22 },
+    { x: 990, y: 350, width: 150, height: 22 }
+];
+
 const basePlatformsOf = (m: MapType): Platform[] =>
     m === 'forest' ? FOREST_PLATFORMS
     : m === 'desert' ? DESERT_PLATFORMS
@@ -1767,6 +2007,7 @@ const basePlatformsOf = (m: MapType): Platform[] =>
     : m === 'prairie' ? PRAIRIE_PLATFORMS
     : m === 'glacier' ? GLACIER_PLATFORMS
     : m === 'space' ? SPACE_PLATFORMS
+    : m === 'village' ? VILLAGE_PLATFORMS
     : NEON_PLATFORMS;
 
 // ================= 每局随机地形 =================
@@ -2149,6 +2390,7 @@ const OBSTACLE_PALETTE: Record<MapType, {
     prairie: { hazard: '#ef4444', hazardDark: '#7f1d1d', block: '#8a6a3a', blockTop: '#a98a4a', blockEdge: '#7cc24a', mover: '#8a6a3a', moverEdge: '#bef264' },
     glacier: { hazard: '#0e7490', hazardDark: '#083344', block: '#7db7cf', blockTop: '#d6f0fa', blockEdge: '#22d3ee', mover: '#7db7cf', moverEdge: '#cffafe' },
     space:   { hazard: '#be185d', hazardDark: '#500724', block: '#4b4570', blockTop: '#6b6396', blockEdge: '#e879f9', mover: '#4b4570', moverEdge: '#f0abfc' },
+    village: { hazard: '#dc2626', hazardDark: '#7f1d1d', block: '#b08050', blockTop: '#caa070', blockEdge: '#7cc24a', mover: '#a87848', moverEdge: '#ffd873' },
 };
 
 // 绘制障碍：伤害陷阱（尖刺）/ 实心阻挡（箱子）/ 移动平台（带轨迹虚线）
@@ -2350,6 +2592,39 @@ const paintPlatforms = (
                 ctx.fill();
             }
         });
+    } else if (map === 'village') {
+        // 村庄：木板台 + 横木梁 + 木板缝（木屋晾台风格，钉子点缀）
+        platforms.forEach(p => {
+            const plank = ctx.createLinearGradient(0, p.y, 0, p.y + p.height);
+            plank.addColorStop(0, '#c98f56');
+            plank.addColorStop(1, '#96633a');
+            ctx.fillStyle = plank;
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 6);
+            ctx.fill();
+            // 竖木板缝
+            ctx.strokeStyle = 'rgba(110, 72, 40, 0.4)';
+            ctx.lineWidth = 1.5;
+            for (let vx = p.x + 18; vx < p.x + p.width - 6; vx += 24) {
+                ctx.beginPath();
+                ctx.moveTo(vx, p.y + 3);
+                ctx.lineTo(vx, p.y + p.height - 3);
+                ctx.stroke();
+            }
+            // 顶部横梁（深木色）+ 高光
+            ctx.fillStyle = '#7a4a26';
+            roundRectPath(ctx, p.x, p.y, p.width, 6, 3);
+            ctx.fill();
+            ctx.fillStyle = 'rgba(255, 225, 180, 0.4)';
+            roundRectPath(ctx, p.x + 2, p.y + 1, p.width - 4, 2, 1);
+            ctx.fill();
+            // 两头的钉子
+            ctx.fillStyle = '#5a3a1c';
+            [0.06, 0.94].forEach(rx => {
+                ctx.beginPath();
+                ctx.arc(p.x + p.width * rx, p.y + 3, 1.4, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        });
     } else {
         // 霓虹都市：金属平台 + 青色霓虹边
         platforms.forEach(p => {
@@ -2505,6 +2780,19 @@ const drawEntity = (ctx: CanvasRenderingContext2D, entity: Entity, frame: number
     ctx.save();
     ctx.translate(entity.pos.x, entity.pos.y); // pos.y 是脚底
 
+    // 喷气背包燃料条：画在头顶上方，不受后面朝向翻转 / 放大 1.3 的影响
+    if (!entity.isDead && entity.jetpackFuel > 0) {
+        const barW = 40;
+        const ratio = entity.jetpackFuel / JETPACK_MAX_FUEL;
+        const by = -entity.height - 16;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.55)';
+        roundRectPath(ctx, -barW / 2 - 1, by - 1, barW + 2, 7, 3.5);
+        ctx.fill();
+        ctx.fillStyle = ratio > 0.3 ? '#38bdf8' : '#f87171'; // 燃料低于 30% 变红提醒
+        roundRectPath(ctx, -barW / 2, by, barW * ratio, 5, 2.5);
+        ctx.fill();
+    }
+
     if (entity.isDead) {
          // 败者静态平躺：固定转 90° 躺下即可，不翻滚
          ctx.rotate(Math.PI / 2 * (entity.facingRight ? 1 : -1));
@@ -2608,6 +2896,51 @@ const drawEntity = (ctx: CanvasRenderingContext2D, entity: Entity, frame: number
     drawArm(armTargets[0]);          // 远侧臂：藏在躯干后面
     drawLeg(legTargets[1]);          // 近侧腿
 
+    // ---- 喷气背包（背在背部，躯干会盖住前缘）----
+    if (entity.jetpackFuel > 0) {
+        const packTop = shoulder.y + 3;
+        const packBottom = hip.y - 2;
+        // 绑带：从背包上沿斜绕到胸前
+        ctx.strokeStyle = '#64748b';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(-8, packTop + 2);
+        ctx.lineTo(7, shoulder.y + 7);
+        ctx.stroke();
+        // 罐体
+        ctx.fillStyle = '#94a3b8';
+        roundRectPath(ctx, -13, packTop, 9, packBottom - packTop, 3);
+        ctx.fill();
+        // 罐体高光
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        roundRectPath(ctx, -12, packTop + 1.5, 2, packBottom - packTop - 3, 1);
+        ctx.fill();
+        // 喷口
+        ctx.fillStyle = '#475569';
+        roundRectPath(ctx, -12, packBottom - 1, 7, 4, 1.5);
+        ctx.fill();
+        // 喷焰：外橙内黄，长度每帧随机抖才有"喷火"感
+        if (entity.jetThrusting) {
+            const nx = -8.5;
+            const flameLen = 15 + Math.random() * 7;
+            ctx.fillStyle = '#f97316';
+            ctx.beginPath();
+            ctx.moveTo(nx - 4.5, packBottom + 2);
+            ctx.quadraticCurveTo(nx - 3, packBottom + flameLen * 0.6, nx, packBottom + flameLen);
+            ctx.quadraticCurveTo(nx + 3, packBottom + flameLen * 0.6, nx + 4.5, packBottom + 2);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = '#fde047';
+            const innerLen = flameLen * 0.6;
+            ctx.beginPath();
+            ctx.moveTo(nx - 2.5, packBottom + 2);
+            ctx.quadraticCurveTo(nx - 1.5, packBottom + innerLen * 0.6, nx, packBottom + innerLen);
+            ctx.quadraticCurveTo(nx + 1.5, packBottom + innerLen * 0.6, nx + 2.5, packBottom + 2);
+            ctx.closePath();
+            ctx.fill();
+        }
+    }
+
     // ---- 躯干 ----
     ctx.strokeStyle = entity.color;
     ctx.beginPath();
@@ -2644,9 +2977,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
   const projectilesRef = useRef<Projectile[]>([]);
   
   // 武器生成控制
-  const spawnedWeaponCountRef = useRef<number>(0); 
+  const spawnedWeaponCountRef = useRef<number>(0);
   const missileIndexRef = useRef<number>(-1);
-  const dragonIndexRef = useRef<number>(-1); 
+  const dragonIndexRef = useRef<number>(-1);
+  // 喷气背包每局至多掉 1 个（0 = 还没掉过）
+  const jetpackSpawnedRef = useRef<number>(0);
+  // 当前喷气声正在响的实体（边沿检测：只在状态变化时开/关音效）
+  const jetActiveRef = useRef<Set<string>>(new Set());
   
   const keysRef = useRef<Set<string>>(new Set());
   const statsRef = useRef<GameStats>({ winner: null, mode: gameMode, duration: 0 });
@@ -2656,14 +2993,156 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
   const victoryFrameRef = useRef<number>(0); // 胜利动画时间轴（帧）
   // 本帧有人出局，等伤害结算完再裁决胜负（见 update 里的 resolveOutcome）
   const pendingOutcomeRef = useRef<boolean>(false);
+  // COOP 双人闯关：波次状态机（其它模式不使用）
+  const waveRef = useRef<number>(1);
+  const waveStateRef = useRef<'fighting' | 'intermission'>('fighting');
+  const waveTimerRef = useRef<number>(0);
+  const coopBannerRef = useRef<{ text: string; life: number } | null>(null);
 
   // 固定步长主循环的时间累积器
   const lastTimeRef = useRef<number>(0);
   const accRef = useRef<number>(0);
   const hudSigRef = useRef<string>(''); // 上一次同步到 HUD 的签名
 
-  // 查找与指定角色敌对且存活的目标
-  const findEnemy = (ownerId: string) => entitiesRef.current.find(e => e.id !== ownerId && !e.isDead); 
+  // 敌我判定：PVE/PVP 里所有人互为敌人；COOP 按阵营分敌我
+  const isHostile = (a: Entity, b: Entity) => gameMode !== 'COOP' || a.team !== b.team;
+
+  // 伤害是否生效：COOP 下同阵营免伤（不误伤队友/自己）；其它模式维持原判定（人人都可能被打）
+  const canDamage = (target: Entity, ownerId: string) => {
+    if (gameMode !== 'COOP') return true;
+    const owner = entitiesRef.current.find(e => e.id === ownerId);
+    return !owner || owner.team !== target.team;
+  };
+
+  // 查找与指定角色敌对且存活的最近目标（追踪弹 / AI 共用）
+  const findEnemy = (ownerId: string) => {
+    const owner = entitiesRef.current.find(e => e.id === ownerId);
+    if (!owner) return entitiesRef.current.find(e => e.id !== ownerId && !e.isDead);
+    let best: Entity | undefined;
+    let bestDist = Infinity;
+    for (const e of entitiesRef.current) {
+      if (e.isDead || e.id === ownerId || !isHostile(owner, e)) continue;
+      const d = Math.abs(e.pos.x - owner.pos.x) + Math.abs(e.pos.y - owner.pos.y);
+      if (d < bestDist) { bestDist = d; best = e; }
+    }
+    return best;
+  };
+
+  /*
+    AI 决策（组件级）：追踪最近的敌对目标，优先捡掉落物，会跳跃越障 / 喷气追高 / 按武器射程攻击。
+    单人模式的 P2 与 COOP 的怪物共用同一套大脑；这里只输出"按键意图"，
+    移动 / 起跳 / 喷气 / 挥击仍由主循环统一执行，行为和真人按键完全一致。
+  */
+  const aiDecide = (self: Entity, lay: Layout) => {
+    const flags = { moveLeft: false, moveRight: false, jump: false, crouch: false, attack: false };
+
+    // 选最近的敌对存活目标
+    let target: Entity | undefined;
+    let bestDist = Infinity;
+    for (const cand of entitiesRef.current) {
+      if (cand.isDead || cand.id === self.id || !isHostile(self, cand)) continue;
+      const d = Math.abs(cand.pos.x - self.pos.x) + Math.abs(cand.pos.y - self.pos.y);
+      if (d < bestDist) { bestDist = d; target = cand; }
+    }
+    if (!target) return flags;
+
+    let targetX = target.pos.x;
+    let targetY = target.pos.y;
+
+    // 手里没武器时优先去捡掉落物（怪物不捡任何掉落物：只追玩家）
+    if (self.team !== 'enemy' && !self.heldWeapon && fallingItemsRef.current.length > 0) {
+      let minDist = 9999;
+      fallingItemsRef.current.forEach(item => {
+        if (self.team === 'enemy' && item.type === 'jetpack') return;
+        const d = Math.abs(item.pos.x - self.pos.x) + Math.abs(item.pos.y - self.pos.y);
+        if (d < minDist) {
+          minDist = d;
+          targetX = item.pos.x;
+          targetY = item.pos.y;
+        }
+      });
+    }
+
+    const distX = targetX - self.pos.x;
+    const distY = targetY - self.pos.y;
+
+    if (Math.abs(distX) > 40) {
+      distX > 0 ? flags.moveRight = true : flags.moveLeft = true;
+    } else if (!self.heldWeapon && Math.abs(distX) < 20) {
+      distX > 0 ? flags.moveLeft = true : flags.moveRight = true;
+    }
+
+    if (self.isGrounded) {
+      if (distY < -100 || (Math.random() < 0.02)) flags.jump = true;
+
+      // 地形感知：前方是实心箱子就起跳翻过去，前方是陷阱就跳过去
+      const dir = flags.moveRight ? 1 : flags.moveLeft ? -1 : 0;
+      if (dir !== 0) {
+        const blocked = lay.blocks.some(b =>
+          self.pos.y > b.y + 4 &&
+          (dir > 0 ? b.x - self.pos.x : self.pos.x - (b.x + b.width)) < 46 &&
+          (dir > 0 ? b.x + b.width > self.pos.x : b.x < self.pos.x));
+        const spikeAhead = lay.spikes.some(sp =>
+          (dir > 0 ? sp.x - self.pos.x : self.pos.x - (sp.x + sp.width)) < 60 &&
+          (dir > 0 ? sp.x + sp.width > self.pos.x : sp.x < self.pos.x));
+        if (blocked || spikeAhead) flags.jump = true;
+      }
+    }
+
+    // 喷气背包：目标在高处（高出一个平台层）时，空中继续"按住跳"喷上去
+    if (!self.isGrounded && self.jetpackFuel > 0 && distY < -90) flags.jump = true;
+
+    self.facingRight = (target.pos.x - self.pos.x) > 0;
+
+    // 攻击距离按武器类型放宽
+    let attackRange = ATTACK_RANGE;
+    if (self.heldWeapon === 'sword') attackRange = getBuiltinStats('sword').range ?? 140; // 长剑射程可在武器库调
+    if (self.heldWeapon === 'atom_bomb') attackRange = 300;
+    if (self.heldWeapon === 'missile') attackRange = 700;
+    if (self.heldWeapon === 'dragon') attackRange = 400;
+    if (self.heldWeapon === 'bomber') attackRange = 800;
+    if (self.heldWeapon === 'pokemon') attackRange = 800;
+    if (self.heldWeapon === 'laser') attackRange = 1000;
+    if (self.heldWeapon === 'zeperion') attackRange = 1000;
+    if (self.heldWeapon === 'c4') attackRange = 300;
+    if (self.heldWeapon === 'piercer') attackRange = 700;
+    if (self.heldWeapon === 'aug') attackRange = 900;
+    if (self.heldWeapon === 'gatling') attackRange = 900;
+    if (self.heldWeapon === 'gas') attackRange = 600;
+    // 自创武器：近战用自己的 range，枪/投掷按远程处理
+    const aiCustom = getCustom(self.heldWeapon);
+    if (aiCustom) attackRange = aiCustom.template === 'melee' ? aiCustom.range : 700;
+
+    if (Math.abs(target.pos.x - self.pos.x) < attackRange && Math.abs(target.pos.y - self.pos.y) < 100) {
+      if (self.attackCooldown === 0 && Math.random() < 0.05) flags.attack = true;
+    }
+
+    return flags;
+  };
+
+  // COOP：按波次制造怪物（复用玩家实体结构，team = 'enemy'，由 AI 操控）
+  const spawnCoopWave = (wave: number) => {
+    const count = COOP_WAVE_ENEMIES[wave - 1] ?? COOP_WAVE_ENEMIES[COOP_WAVE_ENEMIES.length - 1];
+    const hp = COOP_WAVE_HEALTH[wave - 1] ?? 100;
+    for (let i = 0; i < count; i++) {
+      // playerIndex ≥ 2：绕开 P1/P2 的键盘输入分支，怪物一律走 AI
+      const enemy: Entity = {
+        id: `enemy_${wave}_${i}`, type: 'player', playerIndex: 2 + i,
+        pos: { x: 0, y: 100 }, vel: { x: 0, y: 0 },
+        width: 52, height: 91,
+        color: COOP_ENEMY_COLOR,
+        isGrounded: false, isCrouching: false, health: hp, maxHealth: hp, isDead: false,
+        facingRight: false, attackCooldown: 0, isAttacking: false, attackFrame: 0,
+        heldWeapon: null, ammo: 0, weaponDuration: 0, stunFrames: 0, spikeCooldown: 0,
+        jetpackFuel: 0, jetThrusting: false,
+        team: 'enemy'
+      };
+      const slotX = window.innerWidth * (COOP_ENEMY_SLOTS[i % COOP_ENEMY_SLOTS.length]);
+      enemy.pos.x = Math.max(WALL_MARGIN + 30, Math.min(window.innerWidth - WALL_MARGIN - 30, slotX));
+      entitiesRef.current.push(enemy);
+      spawnParticles(enemy.pos.x, enemy.pos.y - 40, enemy.color, 14, 7); // 出生烟雾
+    }
+  };
 
   // 初始化对决
   const initGame = useCallback(() => {
@@ -2672,11 +3151,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
     // P1 (左侧)
     newEntities.push({
       id: 'p1', type: 'player', playerIndex: 0,
-      pos: { x: 100, y: 100 }, vel: { x: 0, y: 0 }, 
+      pos: { x: 100, y: 100 }, vel: { x: 0, y: 0 },
       width: 52, height: 91, color: '#1677ff',
       isGrounded: false, isCrouching: false, health: 100, maxHealth: 100, isDead: false,
       facingRight: true, attackCooldown: 0, isAttacking: false, attackFrame: 0,
-      heldWeapon: null, ammo: 0, weaponDuration: 0, stunFrames: 0, spikeCooldown: 0
+      heldWeapon: null, ammo: 0, weaponDuration: 0, stunFrames: 0, spikeCooldown: 0,
+      jetpackFuel: 0, jetThrusting: false,
+      team: 'player'
     });
 
     // P2/CPU (右侧)
@@ -2686,17 +3167,29 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
       width: 52, height: 91, color: '#facc15',
       isGrounded: false, isCrouching: false, health: 100, maxHealth: 100, isDead: false,
       facingRight: false, attackCooldown: 0, isAttacking: false, attackFrame: 0,
-      heldWeapon: null, ammo: 0, weaponDuration: 0, stunFrames: 0, spikeCooldown: 0
+      heldWeapon: null, ammo: 0, weaponDuration: 0, stunFrames: 0, spikeCooldown: 0,
+      jetpackFuel: 0, jetThrusting: false,
+      team: 'player'
     });
 
     // 每局重新随机一次地形（固定平台保留，随机追加平台与障碍）
     regenerateLayout(map);
 
     entitiesRef.current = newEntities;
+    // COOP：重置波次状态机并刷出第一关的怪物
+    waveRef.current = 1;
+    waveStateRef.current = 'fighting';
+    waveTimerRef.current = 0;
+    coopBannerRef.current = gameMode === 'COOP' ? { text: '第 1 关', life: 150 } : null;
+    if (gameMode === 'COOP') spawnCoopWave(1);
     particlesRef.current = [];
     fallingItemsRef.current = [];
     projectilesRef.current = [];
-    spawnedWeaponCountRef.current = 0; 
+    // 关掉上一局可能残留的喷气声（理论上裁决时已停，这里兜底）
+    jetActiveRef.current.forEach(() => stopJetSound());
+    jetActiveRef.current.clear();
+    spawnedWeaponCountRef.current = 0;
+    jetpackSpawnedRef.current = 0;
     
     const indices = Array.from({length: MAX_WEAPONS_PER_GAME}, (_, i) => i);
     for (let i = indices.length - 1; i > 0; i--) {
@@ -2707,7 +3200,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
     missileIndexRef.current = indices[1];
     dragonIndexRef.current = indices[2]; 
 
-    statsRef.current = { winner: null, mode: gameMode, duration: 0 };
+    statsRef.current = {
+      winner: null, mode: gameMode, duration: 0,
+      ...(gameMode === 'COOP' ? { wave: 1, totalWaves: COOP_TOTAL_WAVES } : {})
+    };
     frameRef.current = 0;
     shakeRef.current = 0;
     flashRef.current = 0;
@@ -2914,7 +3410,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
   };
 
   const spawnFallingItem = (canvasWidth: number) => {
-      let type: AnyWeaponId;
+      let type: ItemKind;
 
       const count = spawnedWeaponCountRef.current;
 
@@ -2923,6 +3419,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           type = 'missile';
       } else if (count === dragonIndexRef.current && !isBuiltinDisabled('dragon')) {
           type = 'dragon';
+      } else if (jetpackSpawnedRef.current === 0 && Math.random() < JETPACK_DROP_CHANCE) {
+          // 普通槽位掷一次：喷气背包道具（每局至多 1 个），不占武器池
+          type = 'jetpack';
+          jetpackSpawnedRef.current = 1;
       } else {
           // 普通池从武器库存档取：被禁用的内置武器剔除，小朋友的自创武器进池
           const normalPool = getDropPool();
@@ -2951,6 +3451,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
     frameRef.current++;
     if (shakeRef.current > 0) shakeRef.current--;
     if (flashRef.current > 0) flashRef.current -= 0.02;
+    // COOP 波次横幅：倒计时归零后消失
+    if (coopBannerRef.current) {
+      coopBannerRef.current.life--;
+      if (coopBannerRef.current.life <= 0) coopBannerRef.current = null;
+    }
 
     if (gameState !== GameState.PLAYING && gameState !== GameState.VICTORY_ANIMATION) return;
 
@@ -2964,6 +3469,20 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
     // 按"谁还站着"裁决本局胜负。两个都倒下 = 同归于尽 = 平局。
     const resolveOutcome = () => {
         if (statsRef.current.winner) return;
+
+        // 裁决后实体不再处理输入（胜利动画提前 return），喷气声在这里统一关掉
+        jetActiveRef.current.forEach(() => stopJetSound());
+        jetActiveRef.current.clear();
+
+        // COOP：只判"全军覆没 = 闯关失败"。清空怪物不算胜负，
+        // 交给下面的波次状态机推进（最后一关清空才宣布胜利）。
+        if (gameMode === 'COOP') {
+            if (entitiesRef.current.filter(e => e.team === 'player').every(p => p.isDead)) {
+                statsRef.current.winner = 'ENEMIES';
+                winTimeoutRef.current = window.setTimeout(() => setGameState(GameState.GAME_OVER), 2200);
+            }
+            return;
+        }
 
         const alive = entitiesRef.current.filter(e => !e.isDead);
         if (alive.length !== 1) {
@@ -3008,7 +3527,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
         const c4Radius = c4.blastRadius ?? 220;
         const c4Damage = c4.damage ?? 40;
         entitiesRef.current.forEach(target => {
-            if (target.id === c4.ownerId || target.isDead) return;
+            if (target.id === c4.ownerId || target.isDead || !canDamage(target, c4.ownerId)) return;
             const dx = target.pos.x - c4.pos.x;
             const dy = target.pos.y - c4.pos.y;
             if (dx * dx + dy * dy < c4Radius * c4Radius) {
@@ -3406,7 +3925,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                     const piercerRadius = proj.blastRadius ?? 200;
                     const piercerDamage = proj.damage ?? 30;
                     entitiesRef.current.forEach(target => {
-                        if (target.id === proj.ownerId || target.isDead) return;
+                        if (target.id === proj.ownerId || target.isDead || !canDamage(target, proj.ownerId)) return;
                         const dx = target.pos.x - proj.pos.x;
                         const dy = target.pos.y - GROUND_Y;
                         if (dx * dx + dy * dy < piercerRadius * piercerRadius) {
@@ -3485,7 +4004,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
             if (proj.gasTimer % 8 === 0) {
                 const R = proj.gasRadius || 120;
                 entitiesRef.current.forEach(target => {
-                    if (target.isDead) return;
+                    if (target.isDead || !canDamage(target, proj.ownerId)) return;
                     const dx = target.pos.x - proj.pos.x;
                     const dy = (target.pos.y - 30) - proj.pos.y;
                     if (dx * dx + dy * dy < (R + 30) * (R + 30)) {
@@ -3524,7 +4043,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
 
             // 命中检测（单发，不穿透）
             entitiesRef.current.forEach(target => {
-                if (target.id === proj.ownerId || target.isDead || !proj.active) return;
+                if (target.id === proj.ownerId || target.isDead || !proj.active || !canDamage(target, proj.ownerId)) return;
                 if (Math.abs(proj.pos.x - target.pos.x) < 20 &&
                     proj.pos.y > target.pos.y - 75 && proj.pos.y < target.pos.y + 10) {
                     proj.active = false;
@@ -3563,7 +4082,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
             const tint = proj.tint ?? '#ffd23a';
 
             entitiesRef.current.forEach(target => {
-                if (target.id === proj.ownerId || target.isDead || !proj.active) return;
+                if (target.id === proj.ownerId || target.isDead || !proj.active || !canDamage(target, proj.ownerId)) return;
                 if (Math.abs(proj.pos.x - target.pos.x) < 20 &&
                     proj.pos.y > target.pos.y - 75 && proj.pos.y < target.pos.y + 10) {
                     proj.active = false;
@@ -3713,7 +4232,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                     const bombRadius = proj.blastRadius ?? 180;
                     const bombDamage = proj.damage ?? 25;
                     entitiesRef.current.forEach(target => {
-                        if (!target.isDead) {
+                        if (!target.isDead && canDamage(target, proj.ownerId)) {
                             const dist = Math.sqrt(Math.pow(target.pos.x - proj.pos.x, 2) + Math.pow(target.pos.y - proj.pos.y, 2));
                             if (dist < bombRadius) {
                                 target.health -= bombDamage;
@@ -3759,7 +4278,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                 spawnExplosionCloud(proj.pos.x, proj.pos.y - 10, radius / 150);
 
                 entitiesRef.current.forEach(target => {
-                    if (!target.isDead) {
+                    if (!target.isDead && canDamage(target, proj.ownerId)) {
                         const dist = Math.sqrt(Math.pow(target.pos.x - proj.pos.x, 2) + Math.pow(target.pos.y - proj.pos.y, 2));
                         if (dist < radius + 30) {
                             target.health -= dmg;
@@ -3784,7 +4303,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
             if (proj.pos.x < 0 || proj.pos.x > canvas.width || proj.pos.y > canvas.height + 100 || proj.pos.y < -200) proj.active = false;
             
             entitiesRef.current.forEach(target => {
-                if (target.id !== proj.ownerId && !target.isDead && proj.active) {
+                if (target.id !== proj.ownerId && !target.isDead && proj.active && canDamage(target, proj.ownerId)) {
                     const hitDist = isMissile ? 50 : 30; 
                     if (Math.abs(proj.pos.x - target.pos.x) < hitDist &&
                         proj.pos.y > target.pos.y - 75 && proj.pos.y < target.pos.y + 10) {
@@ -3862,7 +4381,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           entity.isAttacking = false; entity.attackFrame = 0; entity.isCrouching = false;
 
           const t = victoryFrameRef.current;
-          const targetX = canvas.width / 2;
+          // 双人闯关：两位赢家分列中线两侧，避免重叠成一团
+          const winners = entitiesRef.current.filter(e => e.isWinner);
+          const winnerIdx = winners.findIndex(w => w.id === entity.id);
+          const targetX = canvas.width / 2 + (winners.length > 1 ? (winnerIdx === 0 ? -80 : 80) : 0);
           const targetY = canvas.height / 3;
 
           // 缓动滑向中央（开始慢、越靠近越快，快速就位）
@@ -3892,8 +4414,25 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           return;
       }
 
-      // 拾取武器
-      if (!entity.isDead) {
+      // 拾取喷气背包：背在背上的道具，不占武器槽，手里有武器也能捡（已有背包就不能再捡）
+      // 双人闯关的怪物不能用道具：直接跳过拾取判定
+      if (!entity.isDead && entity.jetpackFuel <= 0 && entity.team !== 'enemy') {
+          const jetIndex = fallingItemsRef.current.findIndex(item => {
+              if (item.type !== 'jetpack') return false;
+              const dx = Math.abs(entity.pos.x - (item.pos.x + item.width / 2));
+              const dy = Math.abs((entity.pos.y - 35) - (item.pos.y + item.height / 2));
+              return dx < 50 && dy < 60;
+          });
+          if (jetIndex !== -1) {
+              entity.jetpackFuel = JETPACK_MAX_FUEL;
+              fallingItemsRef.current.splice(jetIndex, 1);
+              playJumpSound();
+              spawnParticles(entity.pos.x, entity.pos.y - 30, '#7dd3fc', 8, 6);
+          }
+      }
+
+      // 拾取武器（怪物不捡武器：掉落物只留给玩家）
+      if (!entity.isDead && entity.team !== 'enemy') {
           const canPickUp = !entity.heldWeapon || entity.ammo <= 0;
           
           if (canPickUp) {
@@ -4060,88 +4599,24 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
         if (keysRef.current.has('Space')) attack = true;
       }
       
-      // Input P2 / AI
+      // Input P2
       if (entity.playerIndex === 1) {
-          if (gameMode === 'PVP') {
+          if (gameMode !== 'PVE') {
+            // 双人对战 / 双人闯关：P2 由 2P 键盘操控（方向键 + 回车）
             if (keysRef.current.has('ArrowLeft')) moveLeft = true;
             if (keysRef.current.has('ArrowRight')) moveRight = true;
             if (keysRef.current.has('ArrowUp')) jump = true;
             if (keysRef.current.has('ArrowDown')) crouch = true;
             if (keysRef.current.has('Enter')) attack = true;
           } else {
-            // AI Logic
-            const p1 = entitiesRef.current.find(e => e.playerIndex === 0);
-            if (p1 && !p1.isDead) {
-                let targetX = p1.pos.x;
-                let targetY = p1.pos.y;
-                
-                if (!entity.heldWeapon && fallingItemsRef.current.length > 0) {
-                    let minDist = 9999;
-                    fallingItemsRef.current.forEach(item => {
-                        const d = Math.abs(item.pos.x - entity.pos.x) + Math.abs(item.pos.y - entity.pos.y);
-                        if (d < minDist) {
-                            minDist = d;
-                            targetX = item.pos.x;
-                            targetY = item.pos.y;
-                        }
-                    });
-                }
-
-                const distX = targetX - entity.pos.x;
-                const distY = targetY - entity.pos.y; 
-                
-                if (Math.abs(distX) > 40) {
-                    distX > 0 ? moveRight = true : moveLeft = true;
-                } else if (!entity.heldWeapon && Math.abs(distX) < 20) {
-                     distX > 0 ? moveLeft = true : moveRight = true;
-                }
-
-                if (entity.isGrounded) {
-                     if (distY < -100 || (Math.random() < 0.02)) {
-                         jump = true;
-                     }
-
-                     // 地形感知：前方是实心箱子就起跳翻过去，前方是陷阱就跳过去
-                     const dir = moveRight ? 1 : moveLeft ? -1 : 0;
-                     if (dir !== 0) {
-                         const blocked = layout.blocks.some(b =>
-                             entity.pos.y > b.y + 4 &&
-                             (dir > 0 ? b.x - entity.pos.x : entity.pos.x - (b.x + b.width)) < 46 &&
-                             (dir > 0 ? b.x + b.width > entity.pos.x : b.x < entity.pos.x));
-                         const spikeAhead = layout.spikes.some(sp =>
-                             (dir > 0 ? sp.x - entity.pos.x : entity.pos.x - (sp.x + sp.width)) < 60 &&
-                             (dir > 0 ? sp.x + sp.width > entity.pos.x : sp.x < entity.pos.x));
-                         if (blocked || spikeAhead) jump = true;
-                     }
-                }
-                
-                const absDistX = Math.abs(p1.pos.x - entity.pos.x);
-                entity.facingRight = (p1.pos.x - entity.pos.x) > 0;
-                
-                // AI 攻击逻辑
-                let attackRange = ATTACK_RANGE;
-                if (entity.heldWeapon === 'sword') attackRange = getBuiltinStats('sword').range ?? 140; // 长剑射程可在武器库调
-                if (entity.heldWeapon === 'atom_bomb') attackRange = 300;
-                if (entity.heldWeapon === 'missile') attackRange = 700;
-                if (entity.heldWeapon === 'dragon') attackRange = 400;
-                if (entity.heldWeapon === 'bomber') attackRange = 800;
-                if (entity.heldWeapon === 'pokemon') attackRange = 800;
-                if (entity.heldWeapon === 'laser') attackRange = 1000;
-                if (entity.heldWeapon === 'zeperion') attackRange = 1000;
-                if (entity.heldWeapon === 'c4') attackRange = 300;
-                if (entity.heldWeapon === 'piercer') attackRange = 700;
-                if (entity.heldWeapon === 'aug') attackRange = 900;
-                if (entity.heldWeapon === 'gatling') attackRange = 900;
-                if (entity.heldWeapon === 'gas') attackRange = 600;
-                // 自创武器：近战用自己的 range，枪/投掷按远程处理
-                const aiCustom = getCustom(entity.heldWeapon);
-                if (aiCustom) attackRange = aiCustom.template === 'melee' ? aiCustom.range : 700;
-
-                if (absDistX < attackRange && Math.abs(p1.pos.y - entity.pos.y) < 100) {
-                    if (entity.attackCooldown === 0 && Math.random() < 0.05) attack = true;
-                }
-            }
+            // 单人闯关：P2 由 AI 操控（决策逻辑见组件级 aiDecide）
+            ({ moveLeft, moveRight, jump, crouch, attack } = aiDecide(entity, layout));
           }
+      }
+
+      // COOP 敌人：一律 AI 操控（playerIndex ≥ 2 不读键盘，复用同一套 AI）
+      if (entity.team === 'enemy') {
+        ({ moveLeft, moveRight, jump, crouch, attack } = aiDecide(entity, layout));
       }
 
       entity.isCrouching = crouch && entity.isGrounded;
@@ -4152,6 +4627,28 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
       if (jump && entity.isGrounded && !entity.isCrouching) {
           entity.vel.y = JUMP_FORCE;
           playJumpSound();
+      }
+
+      // === 喷气背包：空中继续按住跳跃键就喷气（地面按住不喷，避免和起跳互相干扰）===
+      entity.jetThrusting = false;
+      if (!entity.isGrounded && !entity.isDead && jump && entity.jetpackFuel > 0 && !entity.isCrouching) {
+          entity.vel.y -= JETPACK_THRUST;
+          if (entity.vel.y < JETPACK_MAX_RISE) entity.vel.y = JETPACK_MAX_RISE;
+          // 无限燃料：不再扣减 jetpackFuel，燃料条常驻满格
+          entity.jetThrusting = true;
+          // 火花：从背包喷口（背侧、腰上方）往下喷
+          if (frameRef.current % 2 === 0) {
+              const backX = entity.pos.x + (entity.facingRight ? -10 : 10);
+              spawnParticles(backX, entity.pos.y - 46, Math.random() < 0.5 ? '#fbbf24' : '#fb923c', 2, 6, 0.6, 2.5);
+          }
+      }
+      // 音效边沿检测：开始喷才开声，松手/燃料耗尽才关声
+      if (entity.jetThrusting && !jetActiveRef.current.has(entity.id)) {
+          jetActiveRef.current.add(entity.id);
+          startJetSound();
+      } else if (!entity.jetThrusting && jetActiveRef.current.has(entity.id)) {
+          jetActiveRef.current.delete(entity.id);
+          stopJetSound();
       }
 
       // === 攻击处理 ===
@@ -4273,7 +4770,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                           ? (target.pos.x > startX && target.pos.x < endX)
                           : (target.pos.x < startX && target.pos.x > endX);
                       
-                      if (isHit && Math.abs((target.pos.y - 35) - startY) < 50) {
+                      if (isHit && Math.abs((target.pos.y - 35) - startY) < 50 && canDamage(target, entity.id)) {
                           // 数值结算：伤害来自武器库（原版是一击必杀，现改为可调的高伤狙击）
                           target.health -= laserSt.damage;
                           target.vel.x = entity.facingRight ? 50 : -50;
@@ -4318,7 +4815,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                           ? (target.pos.x > startX && target.pos.x < endX)
                           : (target.pos.x < startX && target.pos.x > endX);
                       
-                      if (isHit && Math.abs((target.pos.y - 35) - startY) < 60) {
+                      if (isHit && Math.abs((target.pos.y - 35) - startY) < 60 && canDamage(target, entity.id)) {
                           target.health -= zeperionSt.damage; // 高伤害，数值来自武器库
                           
                           // 击中特效：橘黄色光球从小变大，爆炸，满天星火
@@ -4527,7 +5024,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
               let hitSomething = false;
 
               entitiesRef.current.forEach(target => {
-                  if (target !== entity && !target.isDead) {
+                  if (target !== entity && !target.isDead && canDamage(target, entity.id)) {
                       const dy = (target.pos.y - 35) - hitY;
                       if (Math.abs(target.pos.x - entity.pos.x) < range && Math.abs(dy) < 60 && 
                           ((entity.facingRight && target.pos.x > entity.pos.x) || (!entity.facingRight && target.pos.x < entity.pos.x))) {
@@ -4621,6 +5118,40 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
         }
     }
 
+    // === 4.7 COOP 波次推进：清光怪物 → 短暂休息 → 刷下一关；最后一关清空 = 通关 ===
+    if (gameMode === 'COOP' && gameState === GameState.PLAYING && !statsRef.current.winner) {
+      const enemies = entitiesRef.current.filter(e => e.team === 'enemy');
+      const players = entitiesRef.current.filter(e => e.team === 'player');
+
+      if (players.every(p => p.isDead)) {
+        // 全军覆没：闯关失败（resolveOutcome 通常已判过，这里兜底）
+        statsRef.current.winner = 'ENEMIES';
+        winTimeoutRef.current = window.setTimeout(() => setGameState(GameState.GAME_OVER), 2200);
+      } else if (waveStateRef.current === 'fighting' && enemies.length > 0 && enemies.every(e => e.isDead)) {
+        if (waveRef.current >= COOP_TOTAL_WAVES) {
+          // 通关！所有活着的玩家一起上台庆祝
+          entitiesRef.current.forEach(e => { if (e.team === 'player' && !e.isDead) e.isWinner = true; });
+          statsRef.current.winner = 'PLAYERS';
+          victoryFrameRef.current = 0;
+          setGameState(GameState.VICTORY_ANIMATION);
+          winTimeoutRef.current = window.setTimeout(() => setGameState(GameState.GAME_OVER), 4000);
+        } else {
+          waveStateRef.current = 'intermission';
+          waveTimerRef.current = COOP_WAVE_INTERMISSION;
+          coopBannerRef.current = { text: `第 ${waveRef.current} 关 完成！`, life: COOP_WAVE_INTERMISSION };
+        }
+      } else if (waveStateRef.current === 'intermission') {
+        waveTimerRef.current--;
+        if (waveTimerRef.current <= 0) {
+          waveRef.current++;
+          spawnCoopWave(waveRef.current);
+          waveStateRef.current = 'fighting';
+          statsRef.current.wave = waveRef.current;
+          coopBannerRef.current = { text: `第 ${waveRef.current} 关`, life: 150 };
+        }
+      }
+    }
+
     // === 5. 粒子更新（移动 / 消亡 / 缩放 / 淡出） ===
     for (let i = particlesRef.current.length - 1; i >= 0; i--) {
       const p = particlesRef.current[i];
@@ -4677,6 +5208,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           drawGlacierBackground(ctx, canvas.width, canvas.height, frameRef.current);
       } else if (map === 'space') {
           drawSpaceBackground(ctx, canvas.width, canvas.height, frameRef.current);
+      } else if (map === 'village') {
+          drawVillageBackground(ctx, canvas.width, canvas.height, frameRef.current);
       } else {
           drawNeonBackground(ctx, canvas.width, canvas.height, frameRef.current);
       }
@@ -4928,6 +5461,48 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
               ctx.arc(dx, dy, 1.2, 0, Math.PI * 2);
               ctx.fill();
           }
+      } else if (map === 'village') {
+          // 乡间土路：草皮顶边 + 暖棕土路 + 断续车辙 + 小石子
+          ctx.fillStyle = '#7cc24a';
+          ctx.fillRect(0, GROUND_Y - 4, canvas.width, 10);
+          ctx.fillStyle = '#93d65e';
+          ctx.fillRect(0, GROUND_Y - 4, canvas.width, 4);
+          // 草丛
+          ctx.fillStyle = '#5cb943';
+          for (let x = 0; x < canvas.width; x += 30) {
+              const gx = x + ((x / 30) % 2) * 9;
+              const gh = 4 + ((x * 5) % 5);
+              ctx.fillRect(gx, GROUND_Y - gh, 3, gh);
+          }
+          // 土路
+          ctx.fillStyle = '#c9a36a';
+          ctx.fillRect(0, GROUND_Y + 6, canvas.width, 26);
+          ctx.fillStyle = '#b08a52';
+          ctx.fillRect(0, GROUND_Y + 32, canvas.width, canvas.height - GROUND_Y - 32);
+          ctx.fillStyle = '#9a7544';
+          ctx.fillRect(0, GROUND_Y + 84, canvas.width, canvas.height - GROUND_Y - 84);
+          // 车辙：两条断续的浅色辙印
+          ctx.strokeStyle = 'rgba(255, 235, 200, 0.35)';
+          ctx.lineWidth = 3;
+          ctx.setLineDash([26, 22]);
+          ctx.beginPath();
+          ctx.moveTo(0, GROUND_Y + 18);
+          ctx.lineTo(canvas.width, GROUND_Y + 18);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(0, GROUND_Y + 26);
+          ctx.lineTo(canvas.width, GROUND_Y + 26);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          // 小石子
+          ctx.fillStyle = 'rgba(90, 65, 35, 0.5)';
+          for (let i = 0; i < 16; i++) {
+              const sx = ((i * 139 + 41) % 100) / 100 * canvas.width;
+              const sy = GROUND_Y + 10 + (i * 17 % 50);
+              ctx.beginPath();
+              ctx.ellipse(sx, sy, 3, 2, 0, 0, Math.PI * 2);
+              ctx.fill();
+          }
       } else {
           ctx.fillStyle = '#1e293b';
           ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
@@ -5073,6 +5648,30 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
              ctx.fillRect(12, 2, 14, 2.5);
              ctx.fillStyle = '#8a5a30'; ctx.fillRect(-14, -4, 4, 8);   // 枪托
              ctx.fillStyle = '#fbbf24'; ctx.fillRect(-12, 4, 10, 6);  // 弹箱
+        } else if (item.type === 'jetpack') {
+             // 喷气背包图标：小罐体 + 绑带 + 一小束火焰（火焰一直轻轻跳，像在招手）
+             ctx.fillStyle = '#94a3b8';
+             roundRectPath(ctx, -5, -9, 10, 15, 3);
+             ctx.fill();
+             ctx.fillStyle = 'rgba(255,255,255,0.5)';
+             ctx.fillRect(-3.5, -7.5, 2, 11);
+             ctx.strokeStyle = '#64748b'; ctx.lineWidth = 2;
+             ctx.beginPath(); ctx.moveTo(-2, -7); ctx.lineTo(6, -2); ctx.stroke();
+             ctx.fillStyle = '#475569';
+             roundRectPath(ctx, -4, 5, 8, 3, 1);
+             ctx.fill();
+             const flick = 5 + Math.random() * 4;
+             ctx.fillStyle = '#f97316';
+             ctx.beginPath();
+             ctx.moveTo(-4, 8);
+             ctx.quadraticCurveTo(-2, 8 + flick * 0.6, 0, 8 + flick);
+             ctx.quadraticCurveTo(2, 8 + flick * 0.6, 4, 8);
+             ctx.fill();
+             ctx.fillStyle = '#fde047';
+             ctx.beginPath();
+             ctx.moveTo(-2, 8);
+             ctx.quadraticCurveTo(0, 8 + flick * 0.5, 2, 8);
+             ctx.fill();
         } else {
              // 自创武器：天上掉下来就是它的 emoji
              const cw = getCustom(item.type);
@@ -5405,6 +6004,22 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           }
       });
       
+      // COOP 波次横幅：屏幕上方居中的大字提示（第 X 关 / 完成！）
+      if (coopBannerRef.current) {
+          const banner = coopBannerRef.current;
+          const alpha = Math.min(1, banner.life / 30); // 最后半秒淡出
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.font = 'italic 900 64px system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.lineWidth = 10;
+          ctx.strokeStyle = '#ffffff';
+          ctx.fillStyle = '#f59e0b';
+          ctx.strokeText(banner.text, canvas.width / 2, canvas.height * 0.24);
+          ctx.fillText(banner.text, canvas.width / 2, canvas.height * 0.24);
+          ctx.restore();
+      }
+
       // Flash
       if (flashRef.current > 0) {
           ctx.fillStyle = `rgba(255, 255, 255, ${flashRef.current})`;

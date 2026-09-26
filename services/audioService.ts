@@ -207,11 +207,17 @@ export const playDragonRoar = () => {
 };
 
 /*
-  喷气背包持续声：循环噪声 + 带通滤波，听感像"嘶——"的气流。
-  用引用计数：两个玩家同时喷气时只开一条声轨，谁先松手都不关，
-  最后一人停止时才淡出。start/stop 必须成对调用。
+  喷气背包持续声：双支路合成
+    - 高频支路：白噪声 → 带通 700Hz，"嘶——"的气流声
+    - 低频支路：白噪声 → 低通 380Hz，涡轮/气流的低频轰鸣
+  两路叠加后音量足够、听感厚实，不再是之前那种单薄的电流嘶声。
+  引用计数：两个玩家同时喷气只开一条声轨，最后一人停止才淡出。
 */
-let jetNodes: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
+let jetNodes: {
+    src: AudioBufferSourceNode;
+    gain: GainNode;
+    lowGain: GainNode;
+} | null = null;
 let jetRefCount = 0;
 
 export const startJetSound = () => {
@@ -225,20 +231,39 @@ export const startJetSound = () => {
         src.buffer = getNoiseBuffer(ctx);
         src.loop = true;
 
-        const filter = ctx.createBiquadFilter();
-        filter.type = 'bandpass';
-        filter.frequency.value = 900;
-        filter.Q.value = 0.6;
+        // 高频支路：气流嘶嘶声
+        const bpFilter = ctx.createBiquadFilter();
+        bpFilter.type = 'bandpass';
+        bpFilter.frequency.value = 700;
+        bpFilter.Q.value = 0.7;
 
-        const gain = ctx.createGain();
-        gain.gain.setValueAtTime(0, ctx.currentTime);
-        gain.gain.linearRampToValueAtTime(0.16, ctx.currentTime + 0.08);
+        const hpGain = ctx.createGain();
+        hpGain.gain.value = 0.5;
 
-        src.connect(filter);
-        filter.connect(gain);
-        gain.connect(ctx.destination);
+        // 低频支路：涡轮轰鸣
+        const lpFilter = ctx.createBiquadFilter();
+        lpFilter.type = 'lowpass';
+        lpFilter.frequency.value = 380;
+
+        const lpGain = ctx.createGain();
+        lpGain.gain.value = 0.7;
+
+        // 总音量：淡入避免爆音
+        const master = ctx.createGain();
+        master.gain.setValueAtTime(0, ctx.currentTime);
+        master.gain.linearRampToValueAtTime(0.35, ctx.currentTime + 0.06);
+
+        src.connect(bpFilter);
+        bpFilter.connect(hpGain);
+        hpGain.connect(master);
+
+        src.connect(lpFilter);
+        lpFilter.connect(lpGain);
+        lpGain.connect(master);
+
+        master.connect(ctx.destination);
         src.start();
-        jetNodes = { src, gain };
+        jetNodes = { src, gain: master, lowGain: lpGain };
     } catch (e) { }
 };
 

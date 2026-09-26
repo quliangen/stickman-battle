@@ -2,12 +2,12 @@
 
 ## 总览
 
-7 张地图（`MapType`）：`neon`（霓虹都市/星空+城市天际线）、`forest`（森林）、`desert`（沙漠）、`ocean`（海洋）、`volcano`（火山）、`night`（黑夜/星空+月亮+萤火虫+夜色草地）、`snow`（雪原/淡日+雪山+雪松+飘雪）。
+10 张地图（`MapType`）：`neon`（霓虹都市/星空+城市天际线）、`forest`（森林）、`desert`（沙漠）、`ocean`（海洋）、`volcano`（火山）、`night`（黑夜/星空+月亮+萤火虫+夜色草地）、`snow`（雪原/淡日+雪山+雪松+飘雪）、`prairie`（草原/蓝天白云+缓丘+风车+野花+蝴蝶+草浪）、`glacier`（冰川/极光+冰川崖+远海浮冰+企鹅+冰晶）、`space`（太空/星云+带环行星+陨石+UFO+流星+月面）。
 
 每张地图由两部分组成：
 
 1. **平台数组常量**：`NEON_PLATFORMS` / `FOREST_PLATFORMS` / ... （[GameCanvas.tsx:521](../components/GameCanvas.tsx#L521)），类型为 `Platform { x, y, width, height }`，通过 `getPlatforms(map, canvasWidth)` 选取。常量里的坐标是 **1280 × 600 基准坐标系**下的设计值，`getPlatforms` 会按当前画布宽高自动缩放（详见 [architecture.md](architecture.md) 的"世界尺寸自适应"）。
-2. **背景绘制函数**：`drawNeonBackground`（neon 星空 + 城市天际线）/ `drawForestBackground` / `drawDesertBackground` / `drawOceanBackground` / `drawVolcanoBackground` / `drawNightBackground`（黑夜）/ `drawSnowBackground`（雪原），在 `draw()` 中按当前地图调用。
+2. **背景绘制函数**：`drawNeonBackground`（neon 星空 + 城市天际线）/ `drawForestBackground` / `drawDesertBackground` / `drawOceanBackground` / `drawVolcanoBackground` / `drawNightBackground`（黑夜）/ `drawSnowBackground`（雪原）/ `drawPrairieBackground`（草原）/ `drawGlacierBackground`（冰川）/ `drawSpaceBackground`（太空），在 `draw()` 中按当前地图调用。
 
 ## 每局随机地形
 

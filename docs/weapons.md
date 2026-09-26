@@ -2,21 +2,20 @@
 
 ## 总览
 
-14 种内置武器（`WeaponType`，见 [types.ts:18](../types.ts#L18)）：
+13 种可获取的内置武器（`WeaponType` 共 14 个，见 [types.ts:18](../types.ts#L18)；`atom_bomb` 已在 v1.9.0 移除，类型保留兜底）：
 
 | 类型 | 武器 |
 |---|---|
 | 近战 | `sword`、`aug`、`gatling`（加特林：射速是 AUG 两倍、单发 4 伤、弹道散射、40 发） |
 | 投掷/射击 | `bomb`、`laser`、`zeperion`（哉佩利敖光线） |
 | 状态机投射物 | `missile`（追踪导弹）、`dragon`（神龙）、`bomber`（轰炸机）、`pokemon`（闪电）、`c4`（遥控炸弹）、`piercer`（穿地弹）、`gas`（毒气） |
-| 超级武器 | `atom_bomb`（核弹） |
 
 另外小朋友可以在**武器库**里做自创武器（见下文「武器库与自创武器」），自创 id 以 `cw_` 开头，和内置类型一起组成 `AnyWeaponId`。
 
 ## 生成规则
 
 - 每局最多掉落 `MAX_WEAPONS_PER_GAME = 6` 件；间隔 `WEAPON_SPAWN_INTERVAL = 900` 帧；存在时间 `WEAPON_LIFETIME = 15 * 60` 帧。
-- `atom_bomb` / `missile` / `dragon` 是**稀有武器**，各自通过 `atomBombIndexRef` / `missileIndexRef` / `dragonIndexRef` 在洗牌后的生成序列中固定槽位（见 `initGame`）。
+- `missile` / `dragon` 是**稀有武器**，各自通过 `missileIndexRef` / `dragonIndexRef` 在洗牌后的生成序列中固定槽位（见 `initGame`）。原子弹（`atom_bomb`）原同属此机制，v1.9.0 起被移除，不再掉落，武器库中也不再显示。
 - 普通池由 `spawnFallingItem` 从 `weaponService.getDropPool()` 取：未被禁用的内置普通武器 + 自创武器 id。稀有槽位也要过禁用开关（`isBuiltinDisabled`），被禁用就退化成普通掉落。
 - 池子为空（全禁用且无自创）时兜底掉长剑，保证天上不会什么都不掉。
 - 玩家拾取判定：`update()` 中按实体与落物距离检测，`heldWeapon` 为空或 `ammo <= 0` 时可拾取；自创武器的弹药量在拾取 switch 的 `default` 分支从存档读。
@@ -59,7 +58,7 @@
 - **默认值表** `BUILTIN_STATS: Record<WeaponType, WeaponStats>`（`WeaponStats` 定义在 [types.ts](../types.ts)：damage / ammo 必有，cooldown / range / knockback / bulletSpeed / blastRadius 按武器取用子集）。
 - **玩家调整**存 `WeaponConfig.overrides`，读取时 `getBuiltinStats(type)` = 默认值合并 override。读写都过 `STAT_LIMITS`（+ `STAT_LIMIT_OVERRIDES`，如毒气伤害上限 10）钳制；调整值等于默认值时自动清键，「恢复默认」就是删掉这件武器的 override。
 - **GameCanvas 接入模式**：和自创武器一致——开火/使用时读一次 `getBuiltinStats`，把 damage / blastRadius 等**烘焙到 `Projectile` 可选字段**或局部变量，命中/爆炸分支读 `proj.damage ?? 默认值`（老存档种出的弹没有这些字段，兜底）。拾取弹药统一 `getBuiltinStats(t).ammo`；AI 的 sword 射程用 `st.range`。
-- **编辑面板**：`BUILTIN_STAT_FIELDS` 声明每件武器开放哪些滑条（如 atom_bomb 只有弹药；gas 的伤害是「每跳伤害」）。UI 在 [WeaponArsenal.tsx](../components/WeaponArsenal.tsx) 的 `BuiltinStatEditor`，名字/emoji 不可改。
+- **编辑面板**：`BUILTIN_STAT_FIELDS` 声明每件武器开放哪些滑条（如 gas 的伤害是「每跳伤害」）。UI 在 [WeaponArsenal.tsx](../components/WeaponArsenal.tsx) 的 `BuiltinStatEditor`，名字/emoji 不可改。
 
 默认数值（伤害/弹药/其他）：
 
@@ -78,7 +77,7 @@
 | pokemon | 20 伤 × 1（+ 麻痹 40 帧） |
 | missile | 35 伤 × 2（追踪） |
 | dragon | 每口 5 伤 × 5 口 |
-| atom_bomb | 全屏抹除 × 1（只开放弹药） |
+| ~~atom_bomb~~ | v1.9.0 已移除（全屏核弹不再掉落） |
 
 ## 平衡数值位置
 

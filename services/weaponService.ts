@@ -19,7 +19,7 @@ const STORAGE_KEY = 'stickman-battle:weapons';
 
 // 内置武器的展示元数据：名字 / 图标 / 一句话说明。
 // GameUI 的 HUD 和武器库共用这一张表，不要在两处各维护一份。
-// rare: true 的三件走固定槽位掉落（见 GameCanvas.spawnFallingItem），不在普通池里。
+// rare: true 的两件走固定槽位掉落（见 GameCanvas.spawnFallingItem），不在普通池里。
 export interface BuiltinMeta {
   type: WeaponType;
   name: string;
@@ -42,7 +42,6 @@ export const BUILTIN_WEAPONS: BuiltinMeta[] = [
   { type: 'pokemon',   name: '皮卡丘',     emoji: '⚡', desc: '追着敌人放电' },
   { type: 'missile',   name: '巡航导弹',   emoji: '🚀', desc: '追踪敌人，稀有武器', rare: true },
   { type: 'dragon',    name: '神龙',       emoji: '🐉', desc: '召唤神龙撕咬，稀有武器', rare: true },
-  { type: 'atom_bomb', name: '原子弹',     emoji: '☢️', desc: '毁天灭地，稀有武器', rare: true },
 ];
 
 // 普通掉落池（稀有武器不在其中）—— 与 GameCanvas.spawnFallingItem 的池子保持一致
@@ -58,7 +57,7 @@ export const BUILTIN_POOL: WeaponType[] = BUILTIN_WEAPONS.filter(w => !w.rare).m
   - 炸弹 = 爆发 AoE；激光 = 狙击（瞬发高伤但射得慢，不再是即死）；哉佩利敖 = 重型光束+爆点
   - C4 = 遥控陷阱；穿地弹 = 反蹲；毒气弹 = 区域封锁
   - 轰炸机 = 三连小炸（区别于手雷的大单发）；皮卡丘 = 刺客单次+瘫痪
-  - 导弹/神龙 = 稀有追踪；原子弹 = 终极全屏
+  - 导弹/神龙 = 稀有追踪（原子弹已在 v1.9.0 从游戏移除，类型与休眠数值保留兜底）
 */
 export const BUILTIN_STATS: Record<WeaponType, WeaponStats> = {
   sword:     { damage: 15, ammo: 8,  range: 140, knockback: 12 },

@@ -25,6 +25,9 @@ const MAPS: { id: MapType; name: string; icon: string; active: string; ring: str
   { id: 'volcano', name: '火山', icon: '🌋', active: 'from-red-500 to-rose-500 shadow-red-700', ring: 'border-rose-200' },
   { id: 'night', name: '黑夜', icon: '🌙', active: 'from-indigo-500 to-violet-600 shadow-indigo-700', ring: 'border-indigo-200' },
   { id: 'snow', name: '雪原', icon: '❄️', active: 'from-sky-400 to-cyan-400 shadow-sky-700', ring: 'border-sky-200' },
+  { id: 'prairie', name: '草原', icon: '🌾', active: 'from-lime-500 to-green-500 shadow-lime-700', ring: 'border-lime-200' },
+  { id: 'glacier', name: '冰川', icon: '🧊', active: 'from-cyan-500 to-teal-500 shadow-cyan-700', ring: 'border-teal-200' },
+  { id: 'space', name: '太空', icon: '🪐', active: 'from-fuchsia-500 to-purple-600 shadow-fuchsia-700', ring: 'border-fuchsia-200' },
 ];
 
 // 首页天空装饰配置：云朵都从右往左慢慢飘（负 delay 让打开页面时它们已经散开），
@@ -417,7 +420,7 @@ const MainMenu: React.FC<MainMenuProps> = ({ setGameState, setGameMode, map, set
 
           {/* 中：选择地图 */}
           <MenuCard icon="🗺️" title="选择地图" delay={0.35}>
-            {/* 5 张地图按 3 + 2 排布，最后一行居中 */}
+            {/* 地图自动换行排布，最后一行居中 */}
             <div className="flex flex-wrap justify-center content-center gap-2 flex-1">
               {MAPS.map(m => {
                 const selected = map === m.id;

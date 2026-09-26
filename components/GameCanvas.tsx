@@ -912,10 +912,725 @@ const drawSnowBackground = (
     });
 };
 
+// ================= 草原动态背景 =================
+// 开阔草甸：蓝天白云 + 缓丘 + 旋转风车 + 野花 + 蝴蝶。
+// 同一套约定：静态元素用固定种子 PRNG 预生成，动态元素以 frame 为时间轴。
+interface PrairieCloud {
+    x: number;
+    y: number;
+    scale: number;
+    speed: number;
+}
+
+interface PrairieFlower {
+    x: number;
+    y: number;
+    color: string;
+}
+
+const PRAIRIE_CLOUDS: PrairieCloud[] = (() => {
+    const rand = mulberry32(20270303);
+    return Array.from({ length: 6 }, () => ({
+        x: rand(),
+        y: 0.06 + rand() * 0.32,
+        scale: 0.55 + rand() * 0.7,
+        speed: 0.08 + rand() * 0.12,
+    }));
+})();
+
+const PRAIRIE_FLOWERS: PrairieFlower[] = (() => {
+    const rand = mulberry32(20270304);
+    const colors = ['#ff5d8f', '#ffd23f', '#ffffff', '#c084fc', '#fb923c'];
+    return Array.from({ length: 26 }, () => ({
+        x: rand(),
+        y: 0.84 + rand() * 0.1,
+        color: colors[Math.floor(rand() * colors.length)],
+    }));
+})();
+
+// 卡通白云：几个圆弧叠出蓬松感
+const drawPuff = (ctx: CanvasRenderingContext2D, cx: number, cy: number, s: number) => {
+    ctx.beginPath();
+    ctx.arc(cx, cy, 18 * s, 0, Math.PI * 2);
+    ctx.arc(cx + 20 * s, cy - 7 * s, 22 * s, 0, Math.PI * 2);
+    ctx.arc(cx + 46 * s, cy, 17 * s, 0, Math.PI * 2);
+    ctx.arc(cx + 23 * s, cy + 8 * s, 20 * s, 0, Math.PI * 2);
+    ctx.fill();
+};
+
+// 草原风车：白色塔身 + 四叶旋翼
+const drawWindmill = (
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    baseY: number,
+    s: number,
+    frame: number
+) => {
+    // 塔身（上窄下宽）
+    ctx.fillStyle = '#f4f6f8';
+    ctx.beginPath();
+    ctx.moveTo(x - 15 * s, baseY);
+    ctx.lineTo(x - 5 * s, baseY - 95 * s);
+    ctx.lineTo(x + 5 * s, baseY - 95 * s);
+    ctx.lineTo(x + 15 * s, baseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(120, 150, 180, 0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // 小门
+    ctx.fillStyle = '#9aa8b8';
+    ctx.beginPath();
+    ctx.arc(x, baseY, 5 * s, Math.PI, 0);
+    ctx.fill();
+    // 顶舱
+    const hubY = baseY - 100 * s;
+    ctx.fillStyle = '#e2e8f0';
+    ctx.beginPath();
+    ctx.arc(x, hubY, 7 * s, 0, Math.PI * 2);
+    ctx.fill();
+    // 四片旋翼（绕轴匀速转）
+    ctx.save();
+    ctx.translate(x, hubY);
+    ctx.rotate(frame * 0.025);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+    for (let i = 0; i < 4; i++) {
+        ctx.rotate(Math.PI / 2);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(3 * s, -30 * s);
+        ctx.lineTo(-3 * s, -30 * s);
+        ctx.closePath();
+        ctx.fill();
+    }
+    ctx.restore();
+    ctx.fillStyle = '#7c8da0';
+    ctx.beginPath();
+    ctx.arc(x, hubY, 3 * s, 0, Math.PI * 2);
+    ctx.fill();
+};
+
+const drawPrairieBackground = (
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    frame: number
+) => {
+    // 1. 明亮蓝天：头顶深蓝，地平线染成暖洋洋的浅色
+    const sky = ctx.createLinearGradient(0, 0, 0, h);
+    sky.addColorStop(0, '#4f9be8');
+    sky.addColorStop(0.6, '#93c7f2');
+    sky.addColorStop(1, '#dceffb');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, h);
+
+    // 2. 太阳：亮黄圆 + 转圈的短线光芒
+    const sunX = w * 0.8;
+    const sunY = h * 0.16;
+    const sunR = Math.min(w, h) * 0.05;
+    ctx.globalCompositeOperation = 'screen';
+    const halo = ctx.createRadialGradient(sunX, sunY, sunR * 0.5, sunX, sunY, sunR * 4.5);
+    halo.addColorStop(0, 'rgba(255, 236, 150, 0.55)');
+    halo.addColorStop(1, 'rgba(255, 236, 150, 0)');
+    ctx.fillStyle = halo;
+    ctx.fillRect(0, 0, w, h);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#ffdd55';
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 221, 85, 0.7)';
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 8; i++) {
+        const a = i * Math.PI / 4 + frame * 0.004;
+        ctx.beginPath();
+        ctx.moveTo(sunX + Math.cos(a) * sunR * 1.5, sunY + Math.sin(a) * sunR * 1.5);
+        ctx.lineTo(sunX + Math.cos(a) * sunR * 2.1, sunY + Math.sin(a) * sunR * 2.1);
+        ctx.stroke();
+    }
+
+    // 3. 白云：慢慢从右往左飘，飘出屏幕从右边再进来
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+    PRAIRIE_CLOUDS.forEach(c => {
+        const cx = ((c.x * w - frame * c.speed) % (w + 160) + (w + 160)) % (w + 160) - 80;
+        drawPuff(ctx, cx, c.y * h, c.scale);
+    });
+
+    // 4. 起伏缓丘：远丘浅、近丘深，丘线用固定相位（帧间不跳动）
+    ctx.fillStyle = '#a7dc7e';
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+    for (let x = 0; x <= w; x += w / 16) {
+        ctx.lineTo(x, h * 0.8 + Math.sin(x * 0.006 + 1.2) * h * 0.045);
+    }
+    ctx.lineTo(w, h);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#84c95c';
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+    for (let x = 0; x <= w; x += w / 16) {
+        ctx.lineTo(x, h * 0.88 + Math.sin(x * 0.008 + 3.4) * h * 0.035);
+    }
+    ctx.lineTo(w, h);
+    ctx.closePath();
+    ctx.fill();
+
+    // 5. 风车：两座，立在远丘线上，叶片一直转
+    drawWindmill(ctx, w * 0.2, h * 0.82, Math.min(w, h) / 600, frame);
+    drawWindmill(ctx, w * 0.66, h * 0.85, Math.min(w, h) / 720, frame);
+
+    // 6. 野花：近丘上的小点点（花茎一小竖 + 花头）
+    PRAIRIE_FLOWERS.forEach(f => {
+        const fx = f.x * w;
+        const fy = f.y * h;
+        ctx.strokeStyle = '#4e8a36';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(fx, fy + 8);
+        ctx.lineTo(fx, fy + 2);
+        ctx.stroke();
+        ctx.fillStyle = f.color;
+        ctx.beginPath();
+        ctx.arc(fx, fy, 2.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ffd23f';
+        ctx.beginPath();
+        ctx.arc(fx, fy, 0.9, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    // 7. 蝴蝶：沿波浪线低飞，翅膀一扇一扇（3 只，颜色不同）
+    const butterflyColors = ['#ff8fab', '#ffb703', '#c084fc'];
+    for (let i = 0; i < 3; i++) {
+        const speed = 0.7 + i * 0.25;
+        const bx = ((frame * speed + i * w * 0.37) % (w + 60) + (w + 60)) % (w + 60) - 30;
+        const by = h * (0.62 + i * 0.08) + Math.sin(frame * 0.08 + i * 2) * 16;
+        const flap = Math.abs(Math.sin(frame * 0.35 + i)) * 6 + 2;
+        ctx.fillStyle = butterflyColors[i];
+        // 左翅 / 右翅
+        ctx.beginPath();
+        ctx.ellipse(bx - 4, by, 4.5, flap, -0.3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(bx + 4, by, 4.5, flap, 0.3, 0, Math.PI * 2);
+        ctx.fill();
+        // 身体
+        ctx.strokeStyle = '#3f3f3f';
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(bx, by - 5);
+        ctx.lineTo(bx, by + 5);
+        ctx.stroke();
+    }
+};
+
+// ================= 冰川动态背景 =================
+// 极地冰原：极光 + 层叠冰川崖 + 远海浮冰 + 企鹅 + 飘落冰晶。
+// 与雪原（白天、雪丘雪松）区分：这是偏夜的冷青色极地，冰是半透明的深蓝色。
+interface GlacierCrystal {
+    x: number;
+    y: number;
+    size: number;
+    speed: number;
+    phase: number;
+    sway: number;
+}
+
+const GLACIER_CRYSTALS: GlacierCrystal[] = (() => {
+    const rand = mulberry32(20270707);
+    return Array.from({ length: 42 }, () => ({
+        x: rand(),
+        y: rand(),
+        size: 1.5 + rand() * 3,
+        speed: 0.4 + rand() * 0.9,
+        phase: rand() * Math.PI * 2,
+        sway: 8 + rand() * 18,
+    }));
+})();
+
+// 极光带：沿一条正弦曲线画柔光宽带，颜色随水平位置渐变
+const drawAurora = (
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    frame: number,
+    baseY: number,
+    amp: number,
+    phaseShift: number,
+    c1: string,
+    c2: string
+) => {
+    const grad = ctx.createLinearGradient(0, 0, w, 0);
+    grad.addColorStop(0, c1);
+    grad.addColorStop(0.5, c2);
+    grad.addColorStop(1, c1);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(0, baseY - 30);
+    for (let x = 0; x <= w; x += 24) {
+        ctx.lineTo(x, baseY + Math.sin(x * 0.006 + frame * 0.01 + phaseShift) * amp);
+    }
+    for (let x = w; x >= 0; x -= 24) {
+        ctx.lineTo(x, baseY + 26 + Math.sin(x * 0.005 + frame * 0.012 + phaseShift + 1) * amp * 0.7);
+    }
+    ctx.closePath();
+    ctx.fill();
+};
+
+// 小企鹅：黑背白肚 + 黄围巾，站定时左右微微晃
+const drawPenguin = (
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    s: number,
+    frame: number,
+    phase: number
+) => {
+    const sway = Math.sin(frame * 0.03 + phase) * 0.06;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(sway);
+    // 身体
+    ctx.fillStyle = '#2b2f3a';
+    ctx.beginPath();
+    ctx.ellipse(0, -12 * s, 9 * s, 13 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // 白肚皮
+    ctx.fillStyle = '#f8fafc';
+    ctx.beginPath();
+    ctx.ellipse(0, -9 * s, 5.5 * s, 9 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // 头（与背同色，叠在顶上）
+    ctx.fillStyle = '#2b2f3a';
+    ctx.beginPath();
+    ctx.arc(0, -22 * s, 7 * s, 0, Math.PI * 2);
+    ctx.fill();
+    // 眼睛
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(-2.6 * s, -23 * s, 1.8 * s, 0, Math.PI * 2);
+    ctx.arc(2.6 * s, -23 * s, 1.8 * s, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#111';
+    ctx.beginPath();
+    ctx.arc(-2.6 * s, -23 * s, 0.9 * s, 0, Math.PI * 2);
+    ctx.arc(2.6 * s, -23 * s, 0.9 * s, 0, Math.PI * 2);
+    ctx.fill();
+    // 嘴
+    ctx.fillStyle = '#f59e0b';
+    ctx.beginPath();
+    ctx.moveTo(-2 * s, -20 * s);
+    ctx.lineTo(2 * s, -20 * s);
+    ctx.lineTo(0, -17 * s);
+    ctx.closePath();
+    ctx.fill();
+    // 黄围巾
+    ctx.fillStyle = '#facc15';
+    roundRectPath(ctx, -7 * s, -16 * s, 14 * s, 3.5 * s, 1.5 * s);
+    ctx.fill();
+    // 脚
+    ctx.fillStyle = '#f59e0b';
+    ctx.beginPath();
+    ctx.ellipse(-3.5 * s, 0, 3 * s, 1.5 * s, 0, 0, Math.PI * 2);
+    ctx.ellipse(3.5 * s, 0, 3 * s, 1.5 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+};
+
+const drawGlacierBackground = (
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    frame: number
+) => {
+    // 1. 极地夜空：深青蓝 → 地平线处泛冰光
+    const sky = ctx.createLinearGradient(0, 0, 0, h);
+    sky.addColorStop(0, '#0a2036');
+    sky.addColorStop(0.55, '#12415c');
+    sky.addColorStop(1, '#5e93ac');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, h);
+
+    // 2. 稀疏寒星（上半天区）
+    const starRand = mulberry32(20270708);
+    ctx.fillStyle = 'rgba(220, 240, 255, 0.8)';
+    for (let i = 0; i < 40; i++) {
+        const sx = starRand() * w;
+        const sy = starRand() * h * 0.3;
+        const tw = 0.4 + 0.6 * Math.abs(Math.sin(frame * 0.03 + i));
+        ctx.globalAlpha = tw;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 0.8 + starRand() * 1.2, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // 3. 极光：两条半透明光带缓缓流动（screen 混合才会发光）
+    ctx.globalCompositeOperation = 'screen';
+    drawAurora(ctx, w, h, frame, h * 0.2, h * 0.05, 0,
+        'rgba(74, 222, 128, 0.16)', 'rgba(125, 211, 252, 0.2)');
+    drawAurora(ctx, w, h, frame, h * 0.3, h * 0.04, 2.4,
+        'rgba(167, 139, 250, 0.14)', 'rgba(110, 231, 183, 0.18)');
+    ctx.globalCompositeOperation = 'source-over';
+
+    // 4. 远海与冰架：深色海平线 + 锯齿状冰崖剪影
+    ctx.fillStyle = '#1d4a63';
+    ctx.fillRect(0, h * 0.72, w, h * 0.12);
+    // 海面浮冰：几个浅色小多边形随波轻晃
+    ctx.fillStyle = 'rgba(214, 240, 250, 0.85)';
+    for (let i = 0; i < 5; i++) {
+        const bx = w * (0.08 + i * 0.2);
+        const by = h * 0.78 + Math.sin(frame * 0.03 + i) * 2;
+        ctx.beginPath();
+        ctx.moveTo(bx - 16, by);
+        ctx.lineTo(bx - 8, by - 5);
+        ctx.lineTo(bx + 8, by - 4);
+        ctx.lineTo(bx + 16, by);
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    // 5. 大冰川崖（两侧）：层叠半透明蓝冰 + 裂纹线
+    const cliffGrad = ctx.createLinearGradient(0, h * 0.4, 0, h);
+    cliffGrad.addColorStop(0, '#bfe8f5');
+    cliffGrad.addColorStop(1, '#5f9fbd');
+    ctx.fillStyle = cliffGrad;
+    // 左崖
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+    ctx.lineTo(0, h * 0.52);
+    ctx.lineTo(w * 0.07, h * 0.46);
+    ctx.lineTo(w * 0.13, h * 0.6);
+    ctx.lineTo(w * 0.1, h);
+    ctx.closePath();
+    ctx.fill();
+    // 右崖
+    ctx.beginPath();
+    ctx.moveTo(w, h);
+    ctx.lineTo(w, h * 0.48);
+    ctx.lineTo(w * 0.93, h * 0.44);
+    ctx.lineTo(w * 0.87, h * 0.62);
+    ctx.lineTo(w * 0.9, h);
+    ctx.closePath();
+    ctx.fill();
+    // 冰裂纹（深蓝细线）与冰面层高光
+    ctx.strokeStyle = 'rgba(30, 90, 130, 0.5)';
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 7; i++) {
+        const side = i < 3;
+        const cx = side ? w * (0.02 + (i * 0.03)) : w * (0.9 - ((i - 3) * 0.03));
+        const cy = h * (0.56 + (i % 3) * 0.12);
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + 6, cy + 14);
+        ctx.lineTo(cx + 2, cy + 28);
+        ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+    ctx.beginPath();
+    ctx.moveTo(0, h * 0.52);
+    ctx.lineTo(w * 0.07, h * 0.46);
+    ctx.lineTo(w * 0.1, h * 0.52);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(w, h * 0.48);
+    ctx.lineTo(w * 0.93, h * 0.44);
+    ctx.lineTo(w * 0.92, h * 0.52);
+    ctx.closePath();
+    ctx.fill();
+
+    // 6. 中景冰架上的企鹅：三只，面朝同一方向轻轻晃
+    drawPenguin(ctx, w * 0.32, h * 0.84, Math.min(w, h) / 560, frame, 0);
+    drawPenguin(ctx, w * 0.38, h * 0.85, Math.min(w, h) / 660, frame, 1.5);
+    drawPenguin(ctx, w * 0.62, h * 0.84, Math.min(w, h) / 600, frame, 3);
+
+    // 7. 飘落冰晶：菱形小冰片（不是圆形雪花），斜斜地缓缓落下
+    GLACIER_CRYSTALS.forEach(c => {
+        const cx = ((c.x * w + Math.sin(frame * 0.012 + c.phase) * c.sway) % w + w) % w;
+        const cy = ((c.y * h + frame * c.speed) % (h + 10)) - 5;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(frame * 0.02 + c.phase);
+        ctx.fillStyle = 'rgba(224, 247, 255, 0.8)';
+        ctx.beginPath();
+        ctx.moveTo(0, -c.size);
+        ctx.lineTo(c.size * 0.6, 0);
+        ctx.lineTo(0, c.size);
+        ctx.lineTo(-c.size * 0.6, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+    });
+};
+
+// ================= 太空动态背景 =================
+// 外太空：深空星云 + 带环行星 + 漂浮陨石 + 巡逻 UFO + 流星 + 漂浮尘埃。
+// 与霓虹（夜空下有城市剪影和地面灯火）区分：这里没有地平线，整片都是宇宙空间。
+interface SpaceStar {
+    x: number;
+    y: number;
+    size: number;
+    phase: number;
+}
+
+interface SpaceAsteroid {
+    x: number;
+    y: number;
+    r: number;
+    phase: number;
+    rotSpeed: number;
+    drift: number;
+    verts: number[];
+}
+
+const SPACE_STARS: SpaceStar[] = (() => {
+    const rand = mulberry32(20271010);
+    return Array.from({ length: 110 }, () => ({
+        x: rand(),
+        y: rand(),
+        size: 0.7 + rand() * 1.8,
+        phase: rand() * Math.PI * 2,
+    }));
+})();
+
+const SPACE_ASTEROIDS: SpaceAsteroid[] = (() => {
+    const rand = mulberry32(20271011);
+    return Array.from({ length: 6 }, () => {
+        const r = 14 + rand() * 26;
+        const n = 8 + Math.floor(rand() * 3);
+        // 各顶点半径抖动，画出来才是坑坑洼洼的石头，而不是圆
+        const verts = Array.from({ length: n }, () => 0.72 + rand() * 0.38);
+        return {
+            x: rand(),
+            y: rand(),
+            r,
+            phase: rand() * Math.PI * 2,
+            rotSpeed: (rand() - 0.5) * 0.01,
+            drift: 0.05 + rand() * 0.1,
+            verts,
+        };
+    });
+})();
+
+// 带环行星（卡通土星）：先画光环，再画本体盖住中间段
+const drawRingedPlanet = (
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    cy: number,
+    r: number,
+    frame: number
+) => {
+    // 光环：两条倾斜椭圆线
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(-0.28);
+    ctx.strokeStyle = 'rgba(232, 180, 255, 0.75)';
+    ctx.lineWidth = r * 0.16;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 1.95, r * 0.62, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255, 240, 200, 0.8)';
+    ctx.lineWidth = r * 0.06;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 1.7, r * 0.52, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    // 行星本体（本体盖住光环中段，自然形成环绕效果）
+    const body = ctx.createLinearGradient(cx - r, cy - r, cx + r, cy + r);
+    body.addColorStop(0, '#c084fc');
+    body.addColorStop(0.55, '#8b5cf6');
+    body.addColorStop(1, '#5b3a9e');
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    // 表面条纹（用裁剪只留在圆内）
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.14)';
+    for (let i = -2; i <= 2; i++) {
+        ctx.fillRect(cx - r, cy + i * r * 0.34 - 3, r * 2, r * 0.1);
+    }
+    // 暗面阴影
+    const shade = ctx.createRadialGradient(cx - r * 0.4, cy - r * 0.4, r * 0.2, cx, cy, r * 1.1);
+    shade.addColorStop(0, 'rgba(255,255,255,0)');
+    shade.addColorStop(1, 'rgba(30, 10, 60, 0.55)');
+    ctx.fillStyle = shade;
+    ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+    ctx.restore();
+    // 一颗小卫星慢慢绕
+    const moonA = frame * 0.012;
+    ctx.fillStyle = '#cbd5e1';
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(moonA) * r * 2.3, cy + Math.sin(moonA) * r * 0.8, r * 0.16, 0, Math.PI * 2);
+    ctx.fill();
+};
+
+// 卡通 UFO：圆顶舱 + 椭圆碟身 + 一排彩灯（轮流闪）
+const drawUFO = (
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    s: number,
+    frame: number
+) => {
+    // 碟身
+    ctx.fillStyle = '#9aa4b8';
+    ctx.beginPath();
+    ctx.ellipse(x, y, 34 * s, 11 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#cdd5e0';
+    ctx.beginPath();
+    ctx.ellipse(x, y - 2 * s, 34 * s, 7 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // 圆顶舱
+    ctx.fillStyle = 'rgba(103, 232, 249, 0.85)';
+    ctx.beginPath();
+    ctx.arc(x, y - 8 * s, 11 * s, Math.PI, 0);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.beginPath();
+    ctx.arc(x - 3 * s, y - 11 * s, 3 * s, 0, Math.PI * 2);
+    ctx.fill();
+    // 彩灯：四个，按帧轮流亮
+    const lightColors = ['#f87171', '#facc15', '#4ade80', '#60a5fa'];
+    lightColors.forEach((c, i) => {
+        const on = Math.floor(frame * 0.25) % 4 === i;
+        ctx.fillStyle = c;
+        ctx.globalAlpha = on ? 1 : 0.3;
+        ctx.beginPath();
+        ctx.arc(x + (-15 + i * 10) * s, y + 5 * s, 2.8 * s, 0, Math.PI * 2);
+        ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+};
+
+const drawSpaceBackground = (
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    frame: number
+) => {
+    // 1. 深空底色：头顶近黑，整体泛紫
+    const space = ctx.createLinearGradient(0, 0, 0, h);
+    space.addColorStop(0, '#04061a');
+    space.addColorStop(0.6, '#0b0e30');
+    space.addColorStop(1, '#180f3a');
+    ctx.fillStyle = space;
+    ctx.fillRect(0, 0, w, h);
+
+    // 2. 星云：几团 screen 混合的柔光（品红 / 青 / 紫）
+    ctx.globalCompositeOperation = 'screen';
+    const nebulae: Array<[number, number, number, string]> = [
+        [0.2, 0.3, 0.32, 'rgba(217, 70, 239, 0.16)'],
+        [0.72, 0.62, 0.38, 'rgba(34, 211, 238, 0.12)'],
+        [0.45, 0.85, 0.3, 'rgba(139, 92, 246, 0.14)'],
+    ];
+    nebulae.forEach(([nx, ny, nr, color]) => {
+        const g = ctx.createRadialGradient(nx * w, ny * h, 0, nx * w, ny * h, nr * Math.min(w, h));
+        g.addColorStop(0, color);
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, w, h);
+    });
+    ctx.globalCompositeOperation = 'source-over';
+
+    // 3. 星星：密密一片，各自一眨一眨
+    SPACE_STARS.forEach(s => {
+        const tw = 0.35 + 0.65 * Math.abs(Math.sin(frame * 0.03 + s.phase));
+        ctx.globalAlpha = tw;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(s.x * w, s.y * h, s.size, 0, Math.PI * 2);
+        ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+
+    // 4. 带环行星 + 小卫星
+    drawRingedPlanet(ctx, w * 0.8, h * 0.24, Math.min(w, h) * 0.085, frame);
+
+    // 5. 陨石：慢慢自转 + 微微漂移
+    SPACE_ASTEROIDS.forEach(a => {
+        const ax = a.x * w + Math.sin(frame * 0.01 + a.phase) * 12;
+        const ay = ((a.y * h + frame * a.drift) % (h + 60) + (h + 60)) % (h + 60) - 30;
+        ctx.save();
+        ctx.translate(ax, ay);
+        ctx.rotate(frame * a.rotSpeed + a.phase);
+        ctx.fillStyle = '#6b6480';
+        ctx.beginPath();
+        a.verts.forEach((v, i) => {
+            const ang = (i / a.verts.length) * Math.PI * 2;
+            const rr = a.r * v;
+            const px = Math.cos(ang) * rr;
+            const py = Math.sin(ang) * rr;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+        });
+        ctx.closePath();
+        ctx.fill();
+        // 一块亮斑（朝向"太阳"的那一侧）
+        ctx.fillStyle = 'rgba(255,255,255,0.18)';
+        ctx.beginPath();
+        ctx.arc(-a.r * 0.3, -a.r * 0.3, a.r * 0.28, 0, Math.PI * 2);
+        ctx.fill();
+        // 小陨石坑
+        ctx.fillStyle = 'rgba(30, 25, 50, 0.5)';
+        ctx.beginPath();
+        ctx.arc(a.r * 0.15, a.r * 0.1, a.r * 0.16, 0, Math.PI * 2);
+        ctx.arc(-a.r * 0.1, a.r * 0.35, a.r * 0.11, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    });
+
+    // 6. UFO：沿波浪线从右往左巡逻，飞出去再从头来
+    const ux = ((w + 80 - (frame * 1.6) % (w + 160)) + (w + 160)) % (w + 160) - 80;
+    const uy = h * 0.5 + Math.sin(frame * 0.04) * 18;
+    drawUFO(ctx, ux, uy, Math.min(w, h) / 560, frame);
+
+    // 7. 流星：每 300 帧划过一颗，起始位置按周期编号变化
+    const period = 300;
+    const phaseInCycle = frame % period;
+    if (phaseInCycle < 26) {
+        const cycle = Math.floor(frame / period);
+        const startX = (((cycle * 53) % 100) / 100) * w;
+        const startY = h * (0.1 + (cycle % 3) * 0.1);
+        const t = phaseInCycle / 26;
+        const mx = startX + t * w * 0.32;
+        const my = startY + t * h * 0.34;
+        const tailLen = 70;
+        const grad = ctx.createLinearGradient(mx, my, mx - tailLen * 0.68, my - tailLen * 0.72);
+        grad.addColorStop(0, 'rgba(255,255,255,0.95)');
+        grad.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(mx, my);
+        ctx.lineTo(mx - tailLen * 0.68, my - tailLen * 0.72);
+        ctx.stroke();
+    }
+
+    // 8. 漂浮尘埃：细小的亮点慢慢往上浮
+    ctx.fillStyle = 'rgba(200, 190, 255, 0.5)';
+    for (let i = 0; i < 26; i++) {
+        const dx = ((i * 61) % 100) / 100 * w + Math.sin(frame * 0.02 + i) * 8;
+        const dy = ((h - ((frame * 0.25 + i * 37) % h)) + h) % h;
+        ctx.beginPath();
+        ctx.arc(dx, dy, 1, 0, Math.PI * 2);
+        ctx.fill();
+    }
+};
+
 // === 物理参数 (提速版) ===
 const GRAVITY = 0.8;
 const FRICTION = 0.82;
-const MOVE_SPEED = 2;
+const MOVE_SPEED = 2.6;
 const JUMP_FORCE = -22;
 
 // === 世界尺寸 ===
@@ -1019,6 +1734,29 @@ const SNOW_PLATFORMS: Platform[] = [
     { x: 1010, y: 340, width: 130, height: 22 }
 ];
 
+// 草原地图平台：草皮土台
+const PRAIRIE_PLATFORMS: Platform[] = [
+    { x: 300, y: 460, width: 190, height: 22 },
+    { x: 790, y: 460, width: 190, height: 22 },
+    { x: 500, y: 270, width: 280, height: 22 }
+];
+
+// 冰川地图平台：层叠冰台
+const GLACIER_PLATFORMS: Platform[] = [
+    { x: 310, y: 470, width: 180, height: 22 },
+    { x: 790, y: 470, width: 180, height: 22 },
+    { x: 530, y: 290, width: 220, height: 22 },
+    { x: 990, y: 350, width: 140, height: 22 }
+];
+
+// 太空地图平台：空间站舱板
+const SPACE_PLATFORMS: Platform[] = [
+    { x: 320, y: 470, width: 180, height: 22 },
+    { x: 780, y: 470, width: 180, height: 22 },
+    { x: 530, y: 290, width: 220, height: 22 },
+    { x: 1010, y: 350, width: 130, height: 22 }
+];
+
 const basePlatformsOf = (m: MapType): Platform[] =>
     m === 'forest' ? FOREST_PLATFORMS
     : m === 'desert' ? DESERT_PLATFORMS
@@ -1026,6 +1764,9 @@ const basePlatformsOf = (m: MapType): Platform[] =>
     : m === 'volcano' ? VOLCANO_PLATFORMS
     : m === 'night' ? NIGHT_PLATFORMS
     : m === 'snow' ? SNOW_PLATFORMS
+    : m === 'prairie' ? PRAIRIE_PLATFORMS
+    : m === 'glacier' ? GLACIER_PLATFORMS
+    : m === 'space' ? SPACE_PLATFORMS
     : NEON_PLATFORMS;
 
 // ================= 每局随机地形 =================
@@ -1405,6 +2146,9 @@ const OBSTACLE_PALETTE: Record<MapType, {
     volcano: { hazard: '#ff5722', hazardDark: '#7c2d12', block: '#4a3333', blockTop: '#6b4a4a', blockEdge: '#ff8c3a', mover: '#4a3333', moverEdge: '#ff8c3a' },
     night:   { hazard: '#b91c5c', hazardDark: '#4c1030', block: '#3b3b58', blockTop: '#52527a', blockEdge: '#818cf8', mover: '#3b3b58', moverEdge: '#a5b4fc' },
     snow:    { hazard: '#0284c7', hazardDark: '#0c4a6e', block: '#a9d4ef', blockTop: '#e8f5fd', blockEdge: '#38bdf8', mover: '#a9d4ef', moverEdge: '#e0f2fe' },
+    prairie: { hazard: '#ef4444', hazardDark: '#7f1d1d', block: '#8a6a3a', blockTop: '#a98a4a', blockEdge: '#7cc24a', mover: '#8a6a3a', moverEdge: '#bef264' },
+    glacier: { hazard: '#0e7490', hazardDark: '#083344', block: '#7db7cf', blockTop: '#d6f0fa', blockEdge: '#22d3ee', mover: '#7db7cf', moverEdge: '#cffafe' },
+    space:   { hazard: '#be185d', hazardDark: '#500724', block: '#4b4570', blockTop: '#6b6396', blockEdge: '#e879f9', mover: '#4b4570', moverEdge: '#f0abfc' },
 };
 
 // 绘制障碍：伤害陷阱（尖刺）/ 实心阻挡（箱子）/ 移动平台（带轨迹虚线）
@@ -1518,6 +2262,93 @@ const paintPlatforms = (
             ctx.fillStyle = 'rgba(148, 187, 219, 0.45)';
             roundRectPath(ctx, p.x - 1, p.y + 3, p.width + 2, 3, 1.5);
             ctx.fill();
+        });
+    } else if (map === 'prairie') {
+        // 草原：泥土台 + 鲜绿草皮 + 小野花（区别于森林的原木苔藓）
+        platforms.forEach(p => {
+            const dirt = ctx.createLinearGradient(0, p.y, 0, p.y + p.height);
+            dirt.addColorStop(0, '#9a7a4a');
+            dirt.addColorStop(1, '#7a5c34');
+            ctx.fillStyle = dirt;
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 9);
+            ctx.fill();
+            // 草皮顶
+            ctx.fillStyle = '#7cc24a';
+            roundRectPath(ctx, p.x - 2, p.y - 4, p.width + 4, 10, 5);
+            ctx.fill();
+            ctx.fillStyle = '#93d65e';
+            roundRectPath(ctx, p.x, p.y - 4, p.width, 4, 2);
+            ctx.fill();
+            // 台面上的两朵小花
+            const dotColors = ['#ff5d8f', '#ffd23f'];
+            dotColors.forEach((c, i) => {
+                const fx = p.x + p.width * (0.28 + i * 0.44);
+                ctx.fillStyle = c;
+                ctx.beginPath();
+                ctx.arc(fx, p.y - 2, 2.6, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#fff7d6';
+                ctx.beginPath();
+                ctx.arc(fx, p.y - 2, 1, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        });
+    } else if (map === 'glacier') {
+        // 冰川：半透明层叠蓝冰台 + 冰棱高光（区别于雪原的积雪顶盖）
+        platforms.forEach(p => {
+            const ice = ctx.createLinearGradient(0, p.y, 0, p.y + p.height);
+            ice.addColorStop(0, '#b7e2f2');
+            ice.addColorStop(1, '#5f97b8');
+            ctx.fillStyle = ice;
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 8);
+            ctx.fill();
+            // 内部冰纹：几条斜向半透明白线
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.lineWidth = 1.5;
+            for (let i = 0; i < 3; i++) {
+                const vx = p.x + p.width * (0.2 + i * 0.3);
+                ctx.beginPath();
+                ctx.moveTo(vx, p.y + 3);
+                ctx.lineTo(vx + 8, p.y + p.height - 3);
+                ctx.stroke();
+            }
+            // 顶面冰光：整条亮边 + 垂下来的小冰锥
+            ctx.fillStyle = 'rgba(230, 248, 255, 0.9)';
+            roundRectPath(ctx, p.x + 2, p.y - 3, p.width - 4, 5, 2.5);
+            ctx.fill();
+            for (let i = 0; i < 3; i++) {
+                const tx = p.x + p.width * (0.2 + i * 0.3);
+                ctx.beginPath();
+                ctx.moveTo(tx - 2.5, p.y + p.height);
+                ctx.lineTo(tx, p.y + p.height + 7);
+                ctx.lineTo(tx + 2.5, p.y + p.height);
+                ctx.closePath();
+                ctx.fill();
+            }
+        });
+    } else if (map === 'space') {
+        // 空间站舱板：深紫灰金属 + 品红霓虹边 + 铆钉（区别于霓虹的青色边）
+        platforms.forEach(p => {
+            const body = ctx.createLinearGradient(0, p.y, 0, p.y + p.height);
+            body.addColorStop(0, '#5b5480');
+            body.addColorStop(1, '#2e2a4a');
+            ctx.fillStyle = body;
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 6);
+            ctx.fill();
+            // 顶部品红霓虹条
+            ctx.fillStyle = '#e879f9';
+            roundRectPath(ctx, p.x + 2, p.y + 1, p.width - 4, 3, 1.5);
+            ctx.fill();
+            ctx.fillStyle = 'rgba(240, 171, 252, 0.35)';
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 6);
+            ctx.fill();
+            // 一排小铆钉
+            ctx.fillStyle = '#c4b5fd';
+            for (let vx = p.x + 10; vx < p.x + p.width - 6; vx += 22) {
+                ctx.beginPath();
+                ctx.arc(vx, p.y + p.height - 5, 1.6, 0, Math.PI * 2);
+                ctx.fill();
+            }
         });
     } else {
         // 霓虹都市：金属平台 + 青色霓虹边
@@ -1814,8 +2645,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
   
   // 武器生成控制
   const spawnedWeaponCountRef = useRef<number>(0); 
-  const atomBombIndexRef = useRef<number>(-1); 
-  const missileIndexRef = useRef<number>(-1); 
+  const missileIndexRef = useRef<number>(-1);
   const dragonIndexRef = useRef<number>(-1); 
   
   const keysRef = useRef<Set<string>>(new Set());
@@ -1874,7 +2704,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
         [indices[i], indices[j]] = [indices[j], indices[i]];
     }
     
-    atomBombIndexRef.current = indices[0];
     missileIndexRef.current = indices[1];
     dragonIndexRef.current = indices[2]; 
 
@@ -2090,9 +2919,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
       const count = spawnedWeaponCountRef.current;
 
       // 稀有槽位也要过武器库的禁用开关：被禁用就退化成普通掉落
-      if (count === atomBombIndexRef.current && !isBuiltinDisabled('atom_bomb')) {
-          type = 'atom_bomb';
-      } else if (count === missileIndexRef.current && !isBuiltinDisabled('missile')) {
+      if (count === missileIndexRef.current && !isBuiltinDisabled('missile')) {
           type = 'missile';
       } else if (count === dragonIndexRef.current && !isBuiltinDisabled('dragon')) {
           type = 'dragon';
@@ -3844,6 +4671,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           drawNightBackground(ctx, canvas.width, canvas.height, frameRef.current);
       } else if (map === 'snow') {
           drawSnowBackground(ctx, canvas.width, canvas.height, frameRef.current);
+      } else if (map === 'prairie') {
+          drawPrairieBackground(ctx, canvas.width, canvas.height, frameRef.current);
+      } else if (map === 'glacier') {
+          drawGlacierBackground(ctx, canvas.width, canvas.height, frameRef.current);
+      } else if (map === 'space') {
+          drawSpaceBackground(ctx, canvas.width, canvas.height, frameRef.current);
       } else {
           drawNeonBackground(ctx, canvas.width, canvas.height, frameRef.current);
       }
@@ -3985,6 +4818,114 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
               ctx.fillStyle = `rgba(255, 255, 255, ${0.4 + twinkle * 0.5})`;
               ctx.beginPath();
               ctx.arc(gx, GROUND_Y + 1 + (i % 3) * 3, 1.6, 0, Math.PI * 2);
+              ctx.fill();
+          }
+      } else if (map === 'prairie') {
+          // 草原地面：鲜绿草面（比森林亮一档），风一吹整片草一起弯腰
+          ctx.fillStyle = '#82c954';
+          ctx.fillRect(0, GROUND_Y - 4, canvas.width, 12);
+          ctx.fillStyle = '#69b23f';
+          ctx.fillRect(0, GROUND_Y + 8, canvas.width, 16);
+          // 土壤
+          ctx.fillStyle = '#7a5a34';
+          ctx.fillRect(0, GROUND_Y + 24, canvas.width, canvas.height - GROUND_Y - 24);
+          ctx.fillStyle = '#684a28';
+          ctx.fillRect(0, GROUND_Y + 72, canvas.width, canvas.height - GROUND_Y - 72);
+          // 风刮的长草叶：整排朝同一边弯，摇摆节奏一致才有「草浪」感
+          ctx.lineCap = 'round';
+          for (let x = 8; x < canvas.width; x += 17) {
+              const bend = Math.sin(frameRef.current * 0.04 + x * 0.05) * 5 + 6;
+              const gh = 9 + ((x * 11) % 7);
+              ctx.strokeStyle = (x % 34 === 0) ? '#9ade62' : '#74bf47';
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.moveTo(x, GROUND_Y - 2);
+              ctx.quadraticCurveTo(x + bend * 0.5, GROUND_Y - gh * 0.6, x + bend, GROUND_Y - gh);
+              ctx.stroke();
+          }
+          // 野花：固定位置、多种颜色
+          const flowerColors = ['#ff5d8f', '#ffd23f', '#ffffff', '#c084fc'];
+          for (let i = 0; i < 16; i++) {
+              const fx = ((i * 83 + 29) % 100) / 100 * canvas.width;
+              const fy = GROUND_Y - 2 - (i % 4) * 2;
+              ctx.fillStyle = flowerColors[i % flowerColors.length];
+              ctx.beginPath();
+              ctx.arc(fx, fy, 2.8, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.fillStyle = '#ffb703';
+              ctx.beginPath();
+              ctx.arc(fx, fy, 1.1, 0, Math.PI * 2);
+              ctx.fill();
+          }
+      } else if (map === 'glacier') {
+          // 冰川地面：厚冰层，顶亮底深，深处隐约透出蓝绿色（冻海的颜色）
+          ctx.fillStyle = '#c8e8f5';
+          ctx.fillRect(0, GROUND_Y - 4, canvas.width, 12);
+          ctx.fillStyle = '#8cc2da';
+          ctx.fillRect(0, GROUND_Y + 8, canvas.width, 20);
+          ctx.fillStyle = '#4f86a6';
+          ctx.fillRect(0, GROUND_Y + 28, canvas.width, canvas.height - GROUND_Y - 28);
+          ctx.fillStyle = '#2f5f7e';
+          ctx.fillRect(0, GROUND_Y + 80, canvas.width, canvas.height - GROUND_Y - 80);
+          // 冰裂缝：深色折线，裂缝口微微发光（冰内透光）
+          for (let i = 0; i < 9; i++) {
+              const cx = ((i * 149 + 40) % 100) / 100 * canvas.width;
+              ctx.strokeStyle = 'rgba(20, 60, 90, 0.55)';
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.moveTo(cx, GROUND_Y + 2);
+              ctx.lineTo(cx + 6, GROUND_Y + 18);
+              ctx.lineTo(cx + 1, GROUND_Y + 34);
+              ctx.lineTo(cx + 7, GROUND_Y + 52);
+              ctx.stroke();
+              ctx.strokeStyle = 'rgba(200, 240, 255, 0.5)';
+              ctx.lineWidth = 1;
+              ctx.beginPath();
+              ctx.moveTo(cx - 1.5, GROUND_Y + 2);
+              ctx.lineTo(cx - 1.5 + 6, GROUND_Y + 18);
+              ctx.stroke();
+          }
+          // 冰面闪光：一眨一眨的冷白反光点
+          for (let i = 0; i < 14; i++) {
+              const gx = ((i * 113 + 17) % 100) / 100 * canvas.width;
+              const twinkle = Math.sin(frameRef.current * 0.05 + i * 1.3);
+              if (twinkle <= 0.35) continue;
+              ctx.fillStyle = `rgba(255, 255, 255, ${0.35 + twinkle * 0.45})`;
+              ctx.beginPath();
+              ctx.arc(gx, GROUND_Y + 1 + (i % 3) * 3, 1.7, 0, Math.PI * 2);
+              ctx.fill();
+          }
+      } else if (map === 'space') {
+          // 月面：灰色月壤 + 陨石坑（深色坑底 + 亮色坑沿）+ 漂浮小陨星
+          ctx.fillStyle = '#b8b3c9';
+          ctx.fillRect(0, GROUND_Y - 4, canvas.width, 12);
+          ctx.fillStyle = '#8e88a6';
+          ctx.fillRect(0, GROUND_Y + 8, canvas.width, 24);
+          ctx.fillStyle = '#5d5778';
+          ctx.fillRect(0, GROUND_Y + 32, canvas.width, canvas.height - GROUND_Y - 32);
+          ctx.fillStyle = '#433e5c';
+          ctx.fillRect(0, GROUND_Y + 84, canvas.width, canvas.height - GROUND_Y - 84);
+          // 陨石坑：上沿亮、下半暗，一个圆就能画出凹陷感
+          for (let i = 0; i < 8; i++) {
+              const cx = ((i * 167 + 30) % 100) / 100 * canvas.width;
+              const cy = GROUND_Y + 6 + (i % 3) * 14;
+              const cr = 7 + (i % 3) * 4;
+              ctx.fillStyle = 'rgba(50, 45, 75, 0.75)';
+              ctx.beginPath();
+              ctx.ellipse(cx, cy + 2, cr, cr * 0.55, 0, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.fillStyle = 'rgba(220, 215, 240, 0.7)';
+              ctx.beginPath();
+              ctx.ellipse(cx, cy, cr, cr * 0.55, 0, Math.PI, 0);
+              ctx.fill();
+          }
+          // 月尘细点
+          ctx.fillStyle = 'rgba(230, 225, 245, 0.6)';
+          for (let i = 0; i < 30; i++) {
+              const dx = ((i * 71 + 13) % 100) / 100 * canvas.width;
+              const dy = GROUND_Y + 2 + (i * 23 % 30);
+              ctx.beginPath();
+              ctx.arc(dx, dy, 1.2, 0, Math.PI * 2);
               ctx.fill();
           }
       } else {

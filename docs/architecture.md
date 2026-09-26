@@ -30,7 +30,7 @@ MainMenu 是**三栏布局**：游戏模式居左、选择地图居中、操作�
   |---|---|---|
   | `GRAVITY` | 0.8 | 重力 |
   | `FRICTION` | 0.82 | 摩擦（下蹲落地时为 0.4） |
-  | `MOVE_SPEED` | 2 | 移动速度 |
+  | `MOVE_SPEED` | 2.6 | 移动速度 |
   | `JUMP_FORCE` | -22 | 跳跃力 |
   | `ATTACK_COOLDOWN` | 18 | 普攻冷却（帧） |
   | `ATTACK_RANGE` / `ATTACK_DAMAGE` | 100 / 8 | 普攻范围/伤害 |

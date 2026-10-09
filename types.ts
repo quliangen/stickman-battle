@@ -7,7 +7,7 @@ export enum GameState {
 
 export type GameMode = 'PVE' | 'PVP' | 'COOP';
 
-export type MapType = 'neon' | 'forest' | 'desert' | 'ocean' | 'volcano' | 'night' | 'snow' | 'prairie' | 'glacier' | 'space' | 'village';
+export type MapType = 'neon' | 'forest' | 'desert' | 'ocean' | 'volcano' | 'night' | 'snow' | 'prairie' | 'glacier' | 'space' | 'village' | 'sky' | 'summit' | 'mine' | 'city';
 
 export interface Vector {
   x: number;
@@ -15,7 +15,7 @@ export interface Vector {
 }
 
 // 移除了 stick, blade, pistol，新增 bomber, pokemon, zeperion, gatling
-export type WeaponType = 'bomb' | 'sword' | 'atom_bomb' | 'missile' | 'dragon' | 'bomber' | 'pokemon' | 'laser' | 'zeperion' | 'c4' | 'piercer' | 'aug' | 'gas' | 'gatling';
+export type WeaponType = 'bomb' | 'sword' | 'atom_bomb' | 'missile' | 'dragon' | 'bomber' | 'pokemon' | 'laser' | 'zeperion' | 'c4' | 'piercer' | 'aug' | 'gas' | 'gatling' | 'revolver' | 'sniper' | 'sk12';
 
 /*
   武器库（WeaponArsenal）里小朋友自创的武器。
@@ -144,6 +144,7 @@ export interface Projectile {
   height: number;
   active: boolean;
   targetId?: string; // 追踪目标ID
+  hitIds?: string[]; // 穿透弹已命中的目标 id（避免同一颗弹反复打同一个人）
 
   // 自创武器（武器库）投射物：参数挂在弹上，update/draw 直接读，不用回查存档
   customId?: CustomWeaponId;

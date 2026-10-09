@@ -11,7 +11,7 @@
  *
  * ⚠️ 改完代码记得同步把 APP_VERSION 往上顶，否则小朋友是解不开锁的。
  */
-export const APP_VERSION = 'v1.15.5';
+export const APP_VERSION = 'v1.22.1';
 
 /** 同一个版本最多能玩几局，超过就燃尽 */
 export const PLAYS_PER_VERSION = 3;

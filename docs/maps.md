@@ -2,12 +2,12 @@
 
 ## 总览
 
-11 张地图（`MapType`）：`neon`（霓虹都市/星空+城市天际线）、`forest`（森林）、`desert`（沙漠）、`ocean`（海洋）、`volcano`（火山）、`night`（黑夜/星空+月亮+萤火虫+夜色草地）、`snow`（雪原/淡日+雪山+雪松+飘雪）、`prairie`（草原/蓝天白云+缓丘+风车+野花+蝴蝶+草浪）、`glacier`（冰川/极光+冰川崖+远海浮冰+企鹅+冰晶）、`space`（太空/星云+带环行星+陨石+UFO+流星+月面）、`village`（村庄/暖蓝天空+木屋烟囱+尖桩栅栏+母鸡+小鸟）。
+15 张地图（`MapType`）：`neon`（霓虹都市/星空+城市天际线）、`forest`（森林）、`desert`（沙漠）、`ocean`（海洋）、`volcano`（火山）、`night`（黑夜/星空+月亮+萤火虫+夜色草地）、`snow`（雪原/淡日+雪山+雪松+飘雪）、`prairie`（草原/蓝天白云+缓丘+风车+野花+蝴蝶+草浪）、`glacier`（冰川/极光+冰川崖+远海浮冰+企鹅+冰晶）、`space`（太空/星云+带环行星+陨石+UFO+流星+月面）、`village`（村庄/暖蓝天空+木屋烟囱+尖桩栅栏+母鸡+小鸟）、`sky`（天空/湛蓝天空+旋转太阳+彩虹+多层飘云+热气球+飞鸟+浮空岛）、`summit`（山顶/破晓天空+旭日+雪峰剪影+云海+盘旋雄鹰+山顶旗帜+吹雪）、`mine`（矿井/暗褐岩洞+发光水晶+钟乳石+摇曳矿灯+木支架+蝙蝠+滴水+矿车铁轨）、`city`（城市/白天都市：湛蓝晴空+摩天楼窗格+水塔闪灯天线+摆动塔吊+高架车流+飞机尾烟+街道斑马线）。
 
 每张地图由两部分组成：
 
 1. **平台数组常量**：`NEON_PLATFORMS` / `FOREST_PLATFORMS` / ... （[GameCanvas.tsx:521](../components/GameCanvas.tsx#L521)），类型为 `Platform { x, y, width, height }`，通过 `getPlatforms(map, canvasWidth)` 选取。常量里的坐标是 **1280 × 600 基准坐标系**下的设计值，`getPlatforms` 会按当前画布宽高自动缩放（详见 [architecture.md](architecture.md) 的"世界尺寸自适应"）。
-2. **背景绘制函数**：`drawNeonBackground`（neon 星空 + 城市天际线）/ `drawForestBackground` / `drawDesertBackground` / `drawOceanBackground` / `drawVolcanoBackground` / `drawNightBackground`（黑夜）/ `drawSnowBackground`（雪原）/ `drawPrairieBackground`（草原）/ `drawGlacierBackground`（冰川）/ `drawSpaceBackground`（太空）/ `drawVillageBackground`（村庄），在 `draw()` 中按当前地图调用。
+2. **背景绘制函数**：`drawNeonBackground`（neon 星空 + 城市天际线）/ `drawForestBackground` / `drawDesertBackground` / `drawOceanBackground` / `drawVolcanoBackground` / `drawNightBackground`（黑夜）/ `drawSnowBackground`（雪原）/ `drawPrairieBackground`（草原）/ `drawGlacierBackground`（冰川）/ `drawSpaceBackground`（太空）/ `drawVillageBackground`（村庄）/ `drawSkyBackground`（天空）/ `drawSummitBackground`（山顶）/ `drawMineBackground`（矿井）/ `drawCityBackground`（城市），在 `draw()` 中按当前地图调用。
 
 ## 每局随机地形
 

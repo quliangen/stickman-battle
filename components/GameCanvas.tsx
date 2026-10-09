@@ -1627,6 +1627,171 @@ const drawSpaceBackground = (
     }
 };
 
+// === 天空背景 ===
+/*
+  云端天空：湛蓝渐变天空 + 旋转光芒的太阳 + 半透明彩虹弧 + 多层飘云 +
+  飘过的热气球 + V 形飞鸟 + 远处迷你浮空岛。主打"腾云驾雾"的轻盈感。
+*/
+const drawSkyBackground = (
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    frame: number
+) => {
+    // 1. 湛蓝天空渐变
+    const sky = ctx.createLinearGradient(0, 0, 0, h);
+    sky.addColorStop(0, '#3b82f6');
+    sky.addColorStop(0.5, '#60a5fa');
+    sky.addColorStop(1, '#bae6fd');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, h);
+
+    // 2. 太阳：右上角，光芒缓慢旋转
+    const sunX = w * 0.86, sunY = h * 0.16, sunR = Math.min(w, h) * 0.055;
+    // 光芒
+    ctx.save();
+    ctx.translate(sunX, sunY);
+    ctx.rotate(frame * 0.005);
+    for (let i = 0; i < 12; i++) {
+        ctx.rotate(Math.PI / 6);
+        ctx.fillStyle = 'rgba(255, 236, 140, 0.5)';
+        ctx.beginPath();
+        ctx.moveTo(0, -sunR * 1.1);
+        ctx.lineTo(5, -sunR * 1.9);
+        ctx.lineTo(-5, -sunR * 1.9);
+        ctx.closePath();
+        ctx.fill();
+    }
+    ctx.restore();
+    // 太阳光晕
+    const glow = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunR * 3.5);
+    glow.addColorStop(0, 'rgba(255, 244, 180, 0.9)');
+    glow.addColorStop(0.4, 'rgba(255, 236, 140, 0.35)');
+    glow.addColorStop(1, 'rgba(255, 236, 140, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(sunX - sunR * 3.5, sunY - sunR * 3.5, sunR * 7, sunR * 7);
+    // 太阳本体
+    ctx.fillStyle = '#fde68a';
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fffbeb';
+    ctx.beginPath();
+    ctx.arc(sunX - sunR * 0.3, sunY - sunR * 0.3, sunR * 0.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 3. 彩虹：半透明七色弧，横跨左半天空
+    const rainbowColors = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#6366f1', '#a855f7'];
+    const cx = w * 0.12, cy = h * 0.85, rBase = w * 0.42;
+    rainbowColors.forEach((c, i) => {
+        ctx.strokeStyle = c + '55';
+        ctx.lineWidth = 14;
+        ctx.beginPath();
+        ctx.arc(cx, cy, rBase - i * 14, Math.PI, Math.PI * 1.5);
+        ctx.stroke();
+    });
+
+    // 4. 多层飘云：远近两层，速度不同，飘出屏循环
+    const cloudLayers: Array<{ y: number; scale: number; speed: number; opacity: number }> = [
+        { y: 0.18, scale: 1.0, speed: 0.4, opacity: 0.95 },
+        { y: 0.42, scale: 0.7, speed: 0.25, opacity: 0.8 },
+        { y: 0.62, scale: 0.5, speed: 0.15, opacity: 0.65 },
+    ];
+    cloudLayers.forEach((layer, li) => {
+        for (let i = 0; i < 5; i++) {
+            const cr = 30 * layer.scale;
+            const x = ((w + cr * 4 - ((frame * layer.speed + i * 280 + li * 120) % (w + cr * 8))) + (w + cr * 8)) % (w + cr * 8) - cr * 4;
+            const y = layer.y * h + Math.sin(frame * 0.008 + i + li) * 6;
+            ctx.fillStyle = `rgba(255, 255, 255, ${layer.opacity})`;
+            ctx.beginPath();
+            ctx.arc(x, y, cr, 0, Math.PI * 2);
+            ctx.arc(x + cr * 0.9, y - cr * 0.4, cr * 0.8, 0, Math.PI * 2);
+            ctx.arc(x - cr * 0.9, y + cr * 0.1, cr * 0.7, 0, Math.PI * 2);
+            ctx.arc(x + cr * 0.3, y + cr * 0.3, cr * 0.75, 0, Math.PI * 2);
+            ctx.arc(x - cr * 0.4, y - cr * 0.2, cr * 0.6, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    });
+
+    // 5. 远处迷你浮空岛（装饰，不可踩）
+    const islands = [
+        { x: 0.15, y: 0.35, s: 0.6 },
+        { x: 0.7, y: 0.28, s: 0.5 },
+    ];
+    islands.forEach((isl, i) => {
+        const ix = isl.x * w + Math.sin(frame * 0.003 + i * 2) * 8;
+        const iy = isl.y * h;
+        const s = isl.s;
+        // 岛顶（草地）
+        ctx.fillStyle = '#4ade80';
+        ctx.beginPath();
+        ctx.ellipse(ix, iy, 40 * s, 12 * s, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // 岛底（岩土倒锥）
+        ctx.fillStyle = '#a16207';
+        ctx.beginPath();
+        ctx.moveTo(ix - 38 * s, iy);
+        ctx.lineTo(ix, iy + 50 * s);
+        ctx.lineTo(ix + 38 * s, iy);
+        ctx.closePath();
+        ctx.fill();
+        // 小棕榈树
+        ctx.fillStyle = '#854d0e';
+        ctx.fillRect(ix - 2 * s, iy - 24 * s, 4 * s, 24 * s);
+        ctx.fillStyle = '#16a34a';
+        for (let k = 0; k < 5; k++) {
+            const ang = (k / 5) * Math.PI * 2 - Math.PI / 2;
+            ctx.beginPath();
+            ctx.ellipse(ix + Math.cos(ang) * 10 * s, iy - 24 * s + Math.sin(ang) * 6 * s, 10 * s, 4 * s, ang, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    });
+
+    // 6. 热气球飘过
+    const balloonX = ((w + 200 - (frame * 0.2 + 100) % (w + 400)) + (w + 400)) % (w + 400) - 200;
+    const balloonY = h * 0.22 + Math.sin(frame * 0.01) * 12;
+    // 气球本体（条纹）
+    const balloonColors = ['#ef4444', '#fbbf24', '#ef4444', '#fbbf24'];
+    for (let i = 0; i < 4; i++) {
+        ctx.fillStyle = balloonColors[i];
+        ctx.beginPath();
+        ctx.arc(balloonX, balloonY, 28, (i / 4) * Math.PI * 2 - Math.PI / 2, ((i + 1) / 4) * Math.PI * 2 - Math.PI / 2);
+        ctx.lineTo(balloonX, balloonY);
+        ctx.fill();
+    }
+    // 气球高光
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.beginPath();
+    ctx.ellipse(balloonX - 8, balloonY - 10, 7, 12, -0.5, 0, Math.PI * 2);
+    ctx.fill();
+    // 吊篮
+    ctx.strokeStyle = '#92400e';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(balloonX - 10, balloonY + 26);
+    ctx.lineTo(balloonX - 6, balloonY + 40);
+    ctx.moveTo(balloonX + 10, balloonY + 26);
+    ctx.lineTo(balloonX + 6, balloonY + 40);
+    ctx.stroke();
+    ctx.fillStyle = '#92400e';
+    ctx.fillRect(balloonX - 9, balloonY + 40, 18, 10);
+
+    // 7. 飞鸟群：V 形翅膀扇动
+    ctx.strokeStyle = 'rgba(60, 60, 80, 0.7)';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 4; i++) {
+        const bx = ((w + 40 - (frame * (0.7 + i * 0.15) + i * 200) % (w + 80)) + (w + 80)) % (w + 80) - 40;
+        const by = h * (0.1 + i * 0.06) + Math.sin(frame * 0.03 + i * 2) * 6;
+        const flap = Math.sin(frame * 0.25 + i * 1.5) * 5;
+        ctx.beginPath();
+        ctx.moveTo(bx - 10, by - flap);
+        ctx.quadraticCurveTo(bx - 4, by + 3, bx, by);
+        ctx.quadraticCurveTo(bx + 4, by + 3, bx + 10, by - flap);
+        ctx.stroke();
+    }
+};
+
 // === 村庄背景 ===
 /*
   田园村庄：暖蓝天空 + 太阳 + 飘云 + 远山丘陵 + 一排烟囱冒烟的木屋 +
@@ -1845,6 +2010,565 @@ const drawVillageBackground = (
     }
 };
 
+// === 山顶背景 ===
+/*
+  黎明山顶：破晓渐变天空 + 低垂旭日 + 远近两层雪峰剪影 + 脚下翻涌的云海 +
+  盘旋的雄鹰 + 迎风飘动的山顶旗帜 + 吹雪颗粒。主打"会当凌绝顶"的高山黎明感。
+*/
+const drawSummitBackground = (
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    frame: number
+) => {
+    // 1. 破晓天空：天顶深蓝 → 中段灰紫 → 地平线暖橙（日出前最亮的一刻）
+    const sky = ctx.createLinearGradient(0, 0, 0, h);
+    sky.addColorStop(0, '#1e3a5f');
+    sky.addColorStop(0.45, '#6d7fa8');
+    sky.addColorStop(0.78, '#e8a87c');
+    sky.addColorStop(1, '#f7c59f');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, h);
+
+    // 2. 旭日：挂在左侧山肩，缓慢呼吸 + 暖色光晕铺开
+    const sunX = w * 0.22;
+    const sunY = h * 0.44 + Math.sin(frame * 0.004) * 4;
+    const sunR = Math.min(w, h) * 0.05;
+    const glow = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunR * 4);
+    glow.addColorStop(0, 'rgba(255, 214, 140, 0.85)');
+    glow.addColorStop(0.4, 'rgba(255, 180, 110, 0.3)');
+    glow.addColorStop(1, 'rgba(255, 180, 110, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(sunX - sunR * 4, sunY - sunR * 4, sunR * 8, sunR * 8);
+    ctx.fillStyle = '#ffd98e';
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffedc2';
+    ctx.beginPath();
+    ctx.arc(sunX - sunR * 0.3, sunY - sunR * 0.3, sunR * 0.45, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 3. 远山雪峰：两层剪影（远淡近深），峰顶各戴一顶锯齿雪帽
+    const layers: Array<{ peaks: number[]; base: number; rise: number; rock: string; snow: string }> = [
+        { peaks: [0.06, 0.28, 0.5, 0.72, 0.94], base: 0.7, rise: 0.32, rock: '#8b96b5', snow: '#eef3fa' },
+        { peaks: [0.16, 0.42, 0.66, 0.88], base: 0.75, rise: 0.24, rock: '#5c6784', snow: '#dfe7f2' },
+    ];
+    layers.forEach((layer, li) => {
+        layer.peaks.forEach((px, i) => {
+            const peakX = px * w + Math.sin(i * 7 + li * 3) * w * 0.02;
+            const peakY = h * (layer.base - layer.rise - (i % 2) * 0.05);
+            const halfW = w * (0.16 + li * 0.03);
+            const baseY = h * layer.base;
+            ctx.fillStyle = layer.rock;
+            ctx.beginPath();
+            ctx.moveTo(peakX - halfW, baseY);
+            ctx.lineTo(peakX, peakY);
+            ctx.lineTo(peakX + halfW, baseY);
+            ctx.closePath();
+            ctx.fill();
+            // 雪帽：峰顶小三角 + 锯齿下沿
+            const capH = (baseY - peakY) * 0.3;
+            ctx.fillStyle = layer.snow;
+            ctx.beginPath();
+            ctx.moveTo(peakX, peakY);
+            ctx.lineTo(peakX + halfW * 0.3, peakY + capH);
+            ctx.lineTo(peakX + halfW * 0.12, peakY + capH * 0.78);
+            ctx.lineTo(peakX - halfW * 0.04, peakY + capH * 0.95);
+            ctx.lineTo(peakX - halfW * 0.18, peakY + capH * 0.72);
+            ctx.lineTo(peakX - halfW * 0.3, peakY + capH);
+            ctx.closePath();
+            ctx.fill();
+        });
+    });
+
+    // 4. 云海：山脚下翻涌的扁长云带，两层错速左右漂移
+    const seaLayers: Array<{ y: number; scale: number; speed: number; opacity: number }> = [
+        { y: 0.72, scale: 1.0, speed: 0.18, opacity: 0.55 },
+        { y: 0.8, scale: 1.3, speed: -0.12, opacity: 0.7 },
+    ];
+    seaLayers.forEach((layer, li) => {
+        for (let i = 0; i < 6; i++) {
+            const cr = 34 * layer.scale;
+            const drift = frame * layer.speed + i * 260 + li * 150;
+            const x = ((drift % (w + cr * 6)) + (w + cr * 6)) % (w + cr * 6) - cr * 3;
+            const y = layer.y * h + Math.sin(frame * 0.006 + i * 2 + li) * 5;
+            ctx.fillStyle = `rgba(245, 240, 250, ${layer.opacity})`;
+            ctx.beginPath();
+            ctx.ellipse(x, y, cr * 1.8, cr * 0.55, 0, 0, Math.PI * 2);
+            ctx.ellipse(x + cr, y - cr * 0.25, cr * 1.2, cr * 0.45, 0, 0, Math.PI * 2);
+            ctx.ellipse(x - cr * 1.1, y + cr * 0.1, cr, cr * 0.4, 0, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    });
+
+    // 5. 山顶旗帜：插在右侧近峰上，旗面迎风波浪飘动
+    const flagX = w * 0.88, flagBaseY = h * 0.51, poleH = h * 0.09;
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(flagX, flagBaseY);
+    ctx.lineTo(flagX, flagBaseY - poleH);
+    ctx.stroke();
+    ctx.fillStyle = '#ef4444';
+    ctx.beginPath();
+    ctx.moveTo(flagX, flagBaseY - poleH);
+    const flagW = w * 0.035, flagH = poleH * 0.42;
+    for (let i = 0; i <= 6; i++) {
+        const t = i / 6;
+        const fx = flagX + flagW * t;
+        const fy = flagBaseY - poleH + flagH * 0.15 + Math.sin(frame * 0.15 + t * 4) * 3 * t;
+        ctx.lineTo(fx, fy);
+    }
+    ctx.lineTo(flagX + flagW, flagBaseY - poleH + flagH);
+    ctx.lineTo(flagX, flagBaseY - poleH + flagH);
+    ctx.closePath();
+    ctx.fill();
+
+    // 6. 盘旋雄鹰：绕一个大椭圆慢慢盘旋，翅膀偶尔扇一下（滑翔为主）
+    for (let i = 0; i < 2; i++) {
+        const orbitA = frame * (0.004 + i * 0.0015) + i * Math.PI;
+        const ex = w * 0.55 + Math.cos(orbitA) * w * 0.28;
+        const ey = h * 0.24 + Math.sin(orbitA * 2) * h * 0.05 + i * h * 0.05;
+        const flap = Math.sin(frame * 0.08 + i * 2) * 3;
+        const span = 13 - i * 2.5; // 远处那只小一号
+        ctx.strokeStyle = `rgba(40, 40, 55, ${0.75 - i * 0.2})`;
+        ctx.lineWidth = 2.2;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(ex - span, ey - flap);
+        ctx.quadraticCurveTo(ex - span * 0.4, ey + 2, ex, ey);
+        ctx.quadraticCurveTo(ex + span * 0.4, ey + 2, ex + span, ey - flap);
+        ctx.stroke();
+    }
+
+    // 7. 吹雪：细小雪粒被山风从左往右卷着飘
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+    for (let i = 0; i < 24; i++) {
+        const sx = ((frame * (0.8 + (i % 4) * 0.3) + i * 173) % (w + 40)) - 20;
+        const sy = ((i * 97) % 100) / 100 * h * 0.85 + Math.sin(frame * 0.05 + i) * 6;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 1 + (i % 3) * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+    }
+};
+
+// === 矿井背景 ===
+/*
+  地下矿井：暗褐岩洞 + 岩层纹理 + 脉动的发光水晶 + 钟乳石 + 摇曳的矿灯 +
+  掠过的蝙蝠 + 滴落的水珠 + 坑道木支架。主打"深入地心的神秘矿洞"。
+*/
+const drawMineBackground = (
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    frame: number
+) => {
+    // 1. 洞穴底色：暗褐岩壁，越深越黑，中央留一点微弱的暖光
+    const cave = ctx.createLinearGradient(0, 0, 0, h);
+    cave.addColorStop(0, '#241a14');
+    cave.addColorStop(0.5, '#2e2119');
+    cave.addColorStop(1, '#15100c');
+    ctx.fillStyle = cave;
+    ctx.fillRect(0, 0, w, h);
+    const ambient = ctx.createRadialGradient(w * 0.5, h * 0.55, 0, w * 0.5, h * 0.55, w * 0.55);
+    ambient.addColorStop(0, 'rgba(255, 190, 120, 0.07)');
+    ambient.addColorStop(1, 'rgba(255, 190, 120, 0)');
+    ctx.fillStyle = ambient;
+    ctx.fillRect(0, 0, w, h);
+
+    // 2. 岩层纹理：横贯的深色层线 + 嵌在壁上的石块
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.lineWidth = 3;
+    for (let i = 0; i < 7; i++) {
+        const ly = (i * 89 + 40) / 640 * h;
+        ctx.beginPath();
+        ctx.moveTo(0, ly);
+        for (let x = 0; x <= w; x += 80) {
+            ctx.lineTo(x, ly + Math.sin(x * 0.01 + i * 2) * 6);
+        }
+        ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(70, 52, 40, 0.5)';
+    for (let i = 0; i < 18; i++) {
+        const rx = ((i * 137 + 31) % 100) / 100 * w;
+        const ry = ((i * 61 + 17) % 100) / 100 * h * 0.9;
+        ctx.beginPath();
+        ctx.ellipse(rx, ry, 7 + (i % 4) * 3, 4 + (i % 3) * 2, i * 0.7, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // 3. 钟乳石：洞顶垂下的一排尖锥，长短交错
+    ctx.fillStyle = '#3a2b20';
+    for (let i = 0; i < 14; i++) {
+        const sx = ((i * 97 + 25) % 100) / 100 * w;
+        const sl = 14 + (i * 37 % 26);
+        const sw = 5 + (i % 3) * 2;
+        ctx.beginPath();
+        ctx.moveTo(sx - sw, 0);
+        ctx.lineTo(sx + sw, 0);
+        ctx.lineTo(sx, sl);
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    // 4. 发光水晶：左右两簇，青紫交错，光晕随帧脉动
+    const clusters = [
+        { x: 0.08, y: 0.78, color: '103, 232, 249', sizes: [16, 11, 8] },
+        { x: 0.93, y: 0.72, color: '192, 132, 252', sizes: [14, 10, 7] },
+        { x: 0.5, y: 0.12, color: '103, 232, 249', sizes: [9, 6] },
+    ];
+    clusters.forEach((c, ci) => {
+        const pulse = 0.55 + Math.sin(frame * 0.04 + ci * 2.1) * 0.25;
+        const cx = c.x * w, cy = c.y * h;
+        const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, 46);
+        halo.addColorStop(0, `rgba(${c.color}, ${0.3 * pulse + 0.15})`);
+        halo.addColorStop(1, `rgba(${c.color}, 0)`);
+        ctx.fillStyle = halo;
+        ctx.fillRect(cx - 46, cy - 46, 92, 92);
+        c.sizes.forEach((size, si) => {
+            const ox = (si - (c.sizes.length - 1) / 2) * size * 0.8;
+            const tilt = (si - 1) * 0.25;
+            ctx.fillStyle = `rgba(${c.color}, ${0.75 + pulse * 0.2})`;
+            ctx.beginPath();
+            ctx.moveTo(cx + ox, cy - size * 1.6 + Math.abs(tilt) * 6);
+            ctx.lineTo(cx + ox + size * 0.42, cy + size * 0.35);
+            ctx.lineTo(cx + ox - size * 0.42, cy + size * 0.35);
+            ctx.closePath();
+            ctx.fill();
+        });
+    });
+
+    // 5. 坑道木支架：左右两根立柱 + 顶梁的剪影，框出矿道感
+    ctx.fillStyle = '#4a3524';
+    const beamW = w * 0.028;
+    ctx.fillRect(w * 0.14, h * 0.1, beamW, h * 0.9);
+    ctx.fillRect(w * 0.86 - beamW, h * 0.1, beamW, h * 0.9);
+    ctx.fillStyle = '#5b4128';
+    ctx.fillRect(w * 0.11, h * 0.08, w * 0.78, beamW * 0.9);
+    // 木纹
+    ctx.strokeStyle = 'rgba(30, 20, 12, 0.5)';
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 3; i++) {
+        const gy = h * 0.08 + beamW * (0.25 + i * 0.25);
+        ctx.beginPath();
+        ctx.moveTo(w * 0.11, gy);
+        ctx.lineTo(w * 0.89, gy);
+        ctx.stroke();
+    }
+
+    // 6. 悬挂矿灯：两盏吊灯从顶梁垂下，轻轻摇晃，暖光晕随摆动
+    const lamps = [{ x: 0.3, phase: 0 }, { x: 0.7, phase: 2.2 }];
+    lamps.forEach(lamp => {
+        const swing = Math.sin(frame * 0.02 + lamp.phase) * 0.08;
+        const lx = lamp.x * w;
+        const ropeLen = h * 0.16;
+        const bx = lx + Math.sin(swing) * ropeLen;
+        const by = h * 0.09 + Math.cos(swing) * ropeLen;
+        ctx.strokeStyle = '#8a7a66';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(lx, h * 0.09);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+        const lampGlow = ctx.createRadialGradient(bx, by + 10, 0, bx, by + 10, 60);
+        lampGlow.addColorStop(0, 'rgba(255, 200, 110, 0.4)');
+        lampGlow.addColorStop(1, 'rgba(255, 200, 110, 0)');
+        ctx.fillStyle = lampGlow;
+        ctx.fillRect(bx - 60, by - 50, 120, 120);
+        // 灯罩（梯形）+ 发光灯芯
+        ctx.fillStyle = '#3f3f46';
+        ctx.beginPath();
+        ctx.moveTo(bx - 9, by);
+        ctx.lineTo(bx + 9, by);
+        ctx.lineTo(bx + 6, by + 16);
+        ctx.lineTo(bx - 6, by + 16);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#ffd27a';
+        ctx.beginPath();
+        ctx.arc(bx, by + 9, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    // 7. 蝙蝠：两只从洞顶掠过，翅膀快速扇动
+    for (let i = 0; i < 2; i++) {
+        const bx = ((w + 60 - (frame * (1.1 + i * 0.4) + i * 500) % (w + 120)) + (w + 120)) % (w + 120) - 60;
+        const by = h * (0.2 + i * 0.1) + Math.sin(frame * 0.06 + i * 3) * 12;
+        const flap = Math.abs(Math.sin(frame * 0.3 + i * 2)) * 6;
+        ctx.strokeStyle = 'rgba(20, 16, 14, 0.9)';
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(bx - 11, by - flap);
+        ctx.quadraticCurveTo(bx - 4, by + 2, bx, by);
+        ctx.quadraticCurveTo(bx + 4, by + 2, bx + 11, by - flap);
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(20, 16, 14, 0.9)';
+        ctx.beginPath();
+        ctx.ellipse(bx, by + 1, 3, 4.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // 8. 滴水：水珠从钟乳石尖端坠落，落到近地面消失，循环往复
+    for (let i = 0; i < 3; i++) {
+        const period = 140 + i * 60;
+        const t = ((frame + i * 80) % period) / period;
+        const dx = ((i * 311 + 137) % 100) / 100 * w;
+        const dy = 30 + t * (h * 0.78);
+        if (t < 0.92) {
+            ctx.fillStyle = 'rgba(150, 200, 255, 0.7)';
+            ctx.beginPath();
+            ctx.ellipse(dx, dy, 1.8, 3.4 + t * 2, 0, 0, Math.PI * 2);
+            ctx.fill();
+        } else {
+            // 落地涟漪
+            const rt = (t - 0.92) / 0.08;
+            ctx.strokeStyle = `rgba(150, 200, 255, ${0.5 * (1 - rt)})`;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.ellipse(dx, 30 + h * 0.78, 4 + rt * 8, 1.5 + rt * 2, 0, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+    }
+};
+
+// === 城市背景 ===
+/*
+  白天都市：湛蓝晴空 + 太阳 + 薄云 + 远近两排摩天楼（窗格/水塔/闪灯天线）+
+  缓缓摆动的塔吊 + 拉尾烟的飞机 + 高架上行驶的小汽车 + 飞鸟。
+  和霓虹都市（夜晚+荧光）区分开，主打"晴朗白天的钢筋森林"。
+*/
+const drawCityBackground = (
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    frame: number
+) => {
+    // 1. 湛蓝晴空：天顶深蓝 → 地平线泛白
+    const sky = ctx.createLinearGradient(0, 0, 0, h);
+    sky.addColorStop(0, '#4a90d9');
+    sky.addColorStop(0.6, '#87bcec');
+    sky.addColorStop(1, '#d7e9f7');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, h);
+
+    // 2. 太阳：右上角，光晕柔和
+    const sunX = w * 0.82, sunY = h * 0.14, sunR = Math.min(w, h) * 0.045;
+    const glow = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunR * 3.5);
+    glow.addColorStop(0, 'rgba(255, 244, 200, 0.85)');
+    glow.addColorStop(0.4, 'rgba(255, 240, 190, 0.3)');
+    glow.addColorStop(1, 'rgba(255, 240, 190, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(sunX - sunR * 3.5, sunY - sunR * 3.5, sunR * 7, sunR * 7);
+    ctx.fillStyle = '#fff3c4';
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 3. 薄云：两朵拉长的扁云慢慢右移
+    for (let i = 0; i < 3; i++) {
+        const cx = ((frame * (0.12 + i * 0.05) + i * 520) % (w + 320)) - 160;
+        const cy = h * (0.12 + i * 0.09);
+        ctx.fillStyle = `rgba(255, 255, 255, ${0.5 - i * 0.1})`;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, 68, 13, 0, 0, Math.PI * 2);
+        ctx.ellipse(cx + 44, cy + 5, 44, 9, 0, 0, Math.PI * 2);
+        ctx.ellipse(cx - 48, cy + 4, 38, 8, 0, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // 4. 远景天际线：淡蓝灰剪影一排（无窗，只勾轮廓）
+    ctx.fillStyle = 'rgba(148, 178, 205, 0.75)';
+    for (let i = 0; i < 12; i++) {
+        const bx = (i * 137 % 100) / 100 * w;
+        const bw = w * (0.05 + (i * 29 % 10) / 100 * 0.05);
+        const bh = h * (0.16 + (i * 53 % 10) / 100 * 0.16);
+        ctx.fillRect(bx - bw / 2, h * 0.62 - bh, bw, bh);
+    }
+
+    // 5. 近景摩天楼：四栋带窗格的大楼，各有楼顶细节
+    const towers = [
+        { x: 0.06, bw: 0.11, bh: 0.42, body: '#7d8ea3', dark: '#6b7b90', win: 'rgba(214, 232, 246, 0.85)' },
+        { x: 0.3, bw: 0.09, bh: 0.52, body: '#93a3b5', dark: '#7f8fa2', win: 'rgba(224, 238, 248, 0.9)' },
+        { x: 0.62, bw: 0.12, bh: 0.46, body: '#8494a8', dark: '#71819a', win: 'rgba(214, 232, 246, 0.85)' },
+        { x: 0.92, bw: 0.1, bh: 0.38, body: '#9aabb8', dark: '#8697a5', win: 'rgba(228, 240, 248, 0.9)' },
+    ];
+    towers.forEach((t, ti) => {
+        const bx = t.x * w - t.bw * w / 2;
+        const bw = t.bw * w;
+        const topY = h * 0.62 - t.bh * h;
+        const bh = t.bh * h;
+        // 楼体（左侧亮、右侧暗，白天的立体感）
+        ctx.fillStyle = t.body;
+        ctx.fillRect(bx, topY, bw, bh);
+        ctx.fillStyle = t.dark;
+        ctx.fillRect(bx + bw * 0.72, topY, bw * 0.28, bh);
+        // 窗格：整齐的行列，个别窗户深色（没反光）
+        ctx.fillStyle = t.win;
+        const cols = Math.max(3, Math.floor(bw / 22));
+        const rows = Math.floor(bh / 26);
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                if ((r * 7 + c * 13 + ti * 5) % 9 === 0) continue; // 留几扇暗窗
+                ctx.fillRect(bx + 8 + c * (bw - 16) / cols, topY + 12 + r * 26, 9, 14);
+            }
+        }
+        // 楼顶女儿墙
+        ctx.fillStyle = t.dark;
+        ctx.fillRect(bx - 2, topY - 4, bw + 4, 6);
+        // 楼顶细节：水塔 / 闪灯天线交替
+        if (ti % 2 === 0) {
+            const tx = bx + bw / 2, ty = topY - 4;
+            ctx.fillStyle = '#5f6b7a';
+            ctx.fillRect(tx - 9, ty - 20, 18, 16); // 罐体
+            ctx.beginPath();
+            ctx.moveTo(tx - 10, ty - 20);
+            ctx.lineTo(tx, ty - 30);
+            ctx.lineTo(tx + 10, ty - 20);
+            ctx.closePath();
+            ctx.fill(); // 锥顶
+            ctx.fillRect(tx - 6, ty - 4, 3, 4); // 支腿
+            ctx.fillRect(tx + 3, ty - 4, 3, 4);
+        } else {
+            const ax = bx + bw / 2;
+            ctx.strokeStyle = '#5f6b7a';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.moveTo(ax, topY - 4);
+            ctx.lineTo(ax, topY - 34);
+            ctx.stroke();
+            // 航空警示灯：每秒闪一次
+            const blink = Math.sin(frame * 0.1) > 0;
+            ctx.fillStyle = blink ? '#ff4d4d' : 'rgba(255, 77, 77, 0.3)';
+            ctx.beginPath();
+            ctx.arc(ax, topY - 36, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    });
+
+    // 6. 塔吊：立在两楼之间，长臂 + 吊绳 + 缓缓摆动的吊钩
+    const craneX = w * 0.47, craneTop = h * 0.16, craneBase = h * 0.62;
+    ctx.strokeStyle = '#e0a526';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(craneX, craneBase);
+    ctx.lineTo(craneX, craneTop);
+    ctx.stroke();
+    // 塔身格构（X 形撑杆）
+    ctx.lineWidth = 1.5;
+    for (let y = craneBase; y > craneTop + 14; y -= 22) {
+        ctx.beginPath();
+        ctx.moveTo(craneX - 5, y);
+        ctx.lineTo(craneX + 5, y - 22);
+        ctx.moveTo(craneX + 5, y);
+        ctx.lineTo(craneX - 5, y - 22);
+        ctx.stroke();
+    }
+    // 长臂（前长后短）+ 配重
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.moveTo(craneX - w * 0.06, craneTop);
+    ctx.lineTo(craneX + w * 0.13, craneTop);
+    ctx.stroke();
+    ctx.fillStyle = '#5f6b7a';
+    ctx.fillRect(craneX - w * 0.06 - 8, craneTop - 2, 12, 12);
+    // 拉索
+    ctx.strokeStyle = '#b8860b';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(craneX, craneTop - 20);
+    ctx.lineTo(craneX + w * 0.13, craneTop);
+    ctx.moveTo(craneX, craneTop - 20);
+    ctx.lineTo(craneX - w * 0.06, craneTop);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(craneX, craneTop - 20);
+    ctx.lineTo(craneX, craneTop);
+    ctx.stroke();
+    // 吊绳 + 吊钩：随帧缓摆
+    const hookT = w * 0.1;
+    const swing = Math.sin(frame * 0.015) * 0.1;
+    const hx = craneX + hookT + Math.sin(swing) * h * 0.12;
+    const hy = craneTop + Math.cos(swing) * h * 0.12;
+    ctx.strokeStyle = '#4a4a4a';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(craneX + hookT, craneTop);
+    ctx.lineTo(hx, hy);
+    ctx.stroke();
+    ctx.strokeStyle = '#e0a526';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(hx, hy + 6, 5, Math.PI * 0.2, Math.PI * 1.6);
+    ctx.stroke();
+
+    // 7. 高架路：楼前一横带，小汽车双向行驶
+    const roadY = h * 0.66;
+    ctx.fillStyle = '#5c6b7d';
+    ctx.fillRect(0, roadY, w, 10);
+    ctx.fillStyle = '#465364';
+    for (let px = 0; px < w; px += 46) { // 桥墩
+        ctx.fillRect(px + 18, roadY + 10, 8, h * 0.1);
+    }
+    const carColors = ['#ef4444', '#3b82f6', '#f59e0b', '#10b981'];
+    for (let i = 0; i < 4; i++) {
+        const dir = i % 2 === 0 ? 1 : -1;
+        const speed = 0.9 + (i % 3) * 0.25;
+        const cx = dir === 1
+            ? ((frame * speed + i * 420) % (w + 60)) - 30
+            : w + 30 - ((frame * speed + i * 380) % (w + 60));
+        const cy = roadY - 6 + (i % 2) * 5;
+        ctx.fillStyle = carColors[i];
+        ctx.fillRect(cx - 9, cy, 18, 6); // 车身
+        ctx.fillRect(cx - 4, cy - 4, 9, 4); // 车顶
+        ctx.fillStyle = '#22303f';
+        ctx.beginPath();
+        ctx.arc(cx - 5, cy + 6, 2, 0, Math.PI * 2);
+        ctx.arc(cx + 5, cy + 6, 2, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // 8. 飞机：高空缓缓划过，身后拉一条淡尾烟
+    const planeX = ((frame * 0.45 + 200) % (w + 240)) - 120;
+    const planeY = h * 0.08 + Math.sin(frame * 0.006) * 4;
+    const trail = ctx.createLinearGradient(planeX - 110, planeY, planeX - 8, planeY);
+    trail.addColorStop(0, 'rgba(255, 255, 255, 0)');
+    trail.addColorStop(1, 'rgba(255, 255, 255, 0.65)');
+    ctx.strokeStyle = trail;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(planeX - 110, planeY + 1);
+    ctx.lineTo(planeX - 10, planeY + 1);
+    ctx.stroke();
+    ctx.fillStyle = '#f1f5f9';
+    ctx.beginPath();
+    ctx.ellipse(planeX, planeY, 11, 3.4, 0, 0, Math.PI * 2); // 机身
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(planeX - 1, planeY - 1);
+    ctx.lineTo(planeX - 8, planeY - 7);
+    ctx.lineTo(planeX - 2, planeY - 7);
+    ctx.lineTo(planeX + 3, planeY - 1);
+    ctx.closePath();
+    ctx.fill(); // 尾翼
+
+    // 9. 飞鸟：三只掠过楼群
+    ctx.strokeStyle = 'rgba(50, 60, 75, 0.7)';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+        const bx = ((w + 40 - (frame * (0.8 + i * 0.2) + i * 260) % (w + 80)) + (w + 80)) % (w + 80) - 40;
+        const by = h * (0.24 + i * 0.05) + Math.sin(frame * 0.04 + i * 2) * 5;
+        const flap = Math.sin(frame * 0.22 + i * 1.8) * 4;
+        ctx.beginPath();
+        ctx.moveTo(bx - 9, by - flap);
+        ctx.quadraticCurveTo(bx - 3, by + 3, bx, by);
+        ctx.quadraticCurveTo(bx + 3, by + 3, bx + 9, by - flap);
+        ctx.stroke();
+    }
+};
+
 // === 物理参数 (提速版) ===
 const GRAVITY = 0.8;
 const FRICTION = 0.82;
@@ -1997,6 +2721,38 @@ const VILLAGE_PLATFORMS: Platform[] = [
     { x: 990, y: 350, width: 150, height: 22 }
 ];
 
+// 天空地图平台：云朵平台
+const SKY_PLATFORMS: Platform[] = [
+    { x: 310, y: 470, width: 180, height: 22 },
+    { x: 790, y: 470, width: 180, height: 22 },
+    { x: 540, y: 300, width: 210, height: 22 },
+    { x: 1000, y: 360, width: 150, height: 22 }
+];
+
+// 山顶地图平台：覆雪岩台（像登山途中的岩阶）
+const SUMMIT_PLATFORMS: Platform[] = [
+    { x: 300, y: 470, width: 180, height: 22 },
+    { x: 800, y: 470, width: 180, height: 22 },
+    { x: 545, y: 320, width: 190, height: 22 },
+    { x: 990, y: 360, width: 150, height: 22 }
+];
+
+// 矿井地图平台：坑道木脚手架
+const MINE_PLATFORMS: Platform[] = [
+    { x: 300, y: 470, width: 180, height: 22 },
+    { x: 800, y: 470, width: 180, height: 22 },
+    { x: 540, y: 310, width: 200, height: 22 },
+    { x: 1000, y: 370, width: 140, height: 22 }
+];
+
+// 城市地图平台：楼顶混凝土检修台
+const CITY_PLATFORMS: Platform[] = [
+    { x: 300, y: 470, width: 180, height: 22 },
+    { x: 800, y: 470, width: 180, height: 22 },
+    { x: 535, y: 300, width: 210, height: 22 },
+    { x: 1000, y: 365, width: 145, height: 22 }
+];
+
 const basePlatformsOf = (m: MapType): Platform[] =>
     m === 'forest' ? FOREST_PLATFORMS
     : m === 'desert' ? DESERT_PLATFORMS
@@ -2008,6 +2764,10 @@ const basePlatformsOf = (m: MapType): Platform[] =>
     : m === 'glacier' ? GLACIER_PLATFORMS
     : m === 'space' ? SPACE_PLATFORMS
     : m === 'village' ? VILLAGE_PLATFORMS
+    : m === 'sky' ? SKY_PLATFORMS
+    : m === 'summit' ? SUMMIT_PLATFORMS
+    : m === 'mine' ? MINE_PLATFORMS
+    : m === 'city' ? CITY_PLATFORMS
     : NEON_PLATFORMS;
 
 // ================= 每局随机地形 =================
@@ -2345,6 +3105,17 @@ const drawHeldWeapon = (ctx: CanvasRenderingContext2D, weapon: AnyWeaponId) => {
         ctx.fillRect(2, 4, 7, 7);           // 握把
         ctx.fillStyle = '#fbbf24';
         ctx.fillRect(-8, -4, 7, 9);         // 弹箱
+    } else if (weapon === 'sk12') {
+        // SK12 散弹枪（手持）：长枪管 + 泵动握把 + 木枪托
+        ctx.fillStyle = '#3a3f44';
+        ctx.fillRect(-2, -5, 26, 6);        // 机匣 + 枪管
+        ctx.fillStyle = '#22262a';
+        ctx.fillRect(14, -6, 12, 4);        // 前段枪管
+        ctx.fillStyle = '#8a5a30';
+        ctx.fillRect(8, 1, 8, 5);           // 泵动握把（木）
+        ctx.fillRect(-10, -2, 9, 8);        // 枪托
+        ctx.fillStyle = '#fb7185';
+        ctx.fillRect(-2, -7, 4, 2);         // 红色霰弹点缀
     } else {
         // 自创武器：手持它的 emoji
         const cw = getCustom(weapon);
@@ -2391,6 +3162,10 @@ const OBSTACLE_PALETTE: Record<MapType, {
     glacier: { hazard: '#0e7490', hazardDark: '#083344', block: '#7db7cf', blockTop: '#d6f0fa', blockEdge: '#22d3ee', mover: '#7db7cf', moverEdge: '#cffafe' },
     space:   { hazard: '#be185d', hazardDark: '#500724', block: '#4b4570', blockTop: '#6b6396', blockEdge: '#e879f9', mover: '#4b4570', moverEdge: '#f0abfc' },
     village: { hazard: '#dc2626', hazardDark: '#7f1d1d', block: '#b08050', blockTop: '#caa070', blockEdge: '#7cc24a', mover: '#a87848', moverEdge: '#ffd873' },
+    sky:     { hazard: '#ef4444', hazardDark: '#7f1d1d', block: '#f59e0b', blockTop: '#fcd34d', blockEdge: '#60a5fa', mover: '#e0e7ff', moverEdge: '#fca5a5' },
+    summit:  { hazard: '#ef4444', hazardDark: '#7f1d1d', block: '#6b7280', blockTop: '#e8eef7', blockEdge: '#94a3b8', mover: '#57534e', moverEdge: '#ffd98e' },
+    mine:    { hazard: '#ef4444', hazardDark: '#7f1d1d', block: '#5b4636', blockTop: '#7a6248', blockEdge: '#f59e0b', mover: '#4a3524', moverEdge: '#fbbf24' },
+    city:    { hazard: '#ef4444', hazardDark: '#7f1d1d', block: '#64748b', blockTop: '#94a3b8', blockEdge: '#facc15', mover: '#475569', moverEdge: '#fbbf24' },
 };
 
 // 绘制障碍：伤害陷阱（尖刺）/ 实心阻挡（箱子）/ 移动平台（带轨迹虚线）
@@ -2624,6 +3399,143 @@ const paintPlatforms = (
                 ctx.arc(p.x + p.width * rx, p.y + 3, 1.4, 0, Math.PI * 2);
                 ctx.fill();
             });
+        });
+    } else if (map === 'sky') {
+        // 天空：云朵平台——蓬松白云，顶部亮白、底部淡蓝灰，边缘圆弧凸起
+        platforms.forEach(p => {
+            // 云朵底色（顶部白 → 底部淡蓝灰）
+            const cloudGrad = ctx.createLinearGradient(0, p.y, 0, p.y + p.height);
+            cloudGrad.addColorStop(0, '#ffffff');
+            cloudGrad.addColorStop(0.6, '#f1f5f9');
+            cloudGrad.addColorStop(1, '#cbd5e1');
+            ctx.fillStyle = cloudGrad;
+            // 主体圆角矩形
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 11);
+            ctx.fill();
+            // 顶部一排圆弧凸起，让云看起来蓬松
+            const bumpR = p.height * 0.7;
+            const bumpCount = Math.max(2, Math.floor(p.width / (bumpR * 1.3)));
+            ctx.fillStyle = '#ffffff';
+            for (let i = 0; i <= bumpCount; i++) {
+                const bx = p.x + (p.width / bumpCount) * i;
+                ctx.beginPath();
+                ctx.arc(bx, p.y + 2, bumpR, Math.PI, 0);
+                ctx.fill();
+            }
+            // 底部阴影（淡蓝灰）
+            ctx.fillStyle = 'rgba(148, 163, 184, 0.5)';
+            roundRectPath(ctx, p.x + 6, p.y + p.height - 5, p.width - 12, 4, 2);
+            ctx.fill();
+        });
+    } else if (map === 'summit') {
+        // 山顶：覆雪岩台——青灰岩石本体 + 顶部积雪层 + 岩石裂纹
+        platforms.forEach(p => {
+            const rock = ctx.createLinearGradient(0, p.y, 0, p.y + p.height);
+            rock.addColorStop(0, '#828da3');
+            rock.addColorStop(0.5, '#6b7280');
+            rock.addColorStop(1, '#4b5563');
+            ctx.fillStyle = rock;
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 6);
+            ctx.fill();
+            // 顶部积雪（圆角雪层 + 前沿小冰凌）
+            ctx.fillStyle = '#eef3fa';
+            roundRectPath(ctx, p.x, p.y, p.width, 7, 3.5);
+            ctx.fill();
+            ctx.fillStyle = '#dfe7f2';
+            for (let ix = p.x + 14; ix < p.x + p.width - 8; ix += 34) {
+                ctx.beginPath();
+                ctx.moveTo(ix - 3, p.y + 6);
+                ctx.lineTo(ix + 3, p.y + 6);
+                ctx.lineTo(ix, p.y + 11);
+                ctx.closePath();
+                ctx.fill();
+            }
+            // 岩石裂纹
+            ctx.strokeStyle = 'rgba(30, 41, 59, 0.4)';
+            ctx.lineWidth = 1.5;
+            for (let cx = p.x + 26; cx < p.x + p.width - 12; cx += 48) {
+                ctx.beginPath();
+                ctx.moveTo(cx, p.y + 10);
+                ctx.lineTo(cx - 5, p.y + p.height - 4);
+                ctx.stroke();
+            }
+        });
+    } else if (map === 'mine') {
+        // 矿井：坑道木脚手架——厚木板 + 铁箍 + 铆钉，底下垫横梁
+        platforms.forEach(p => {
+            const wood = ctx.createLinearGradient(0, p.y, 0, p.y + p.height);
+            wood.addColorStop(0, '#a07040');
+            wood.addColorStop(0.5, '#8a5a30');
+            wood.addColorStop(1, '#6e4522');
+            ctx.fillStyle = wood;
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 5);
+            ctx.fill();
+            // 木板缝
+            ctx.strokeStyle = 'rgba(50, 30, 15, 0.45)';
+            ctx.lineWidth = 1.5;
+            for (let vx = p.x + 20; vx < p.x + p.width - 8; vx += 26) {
+                ctx.beginPath();
+                ctx.moveTo(vx, p.y + 3);
+                ctx.lineTo(vx, p.y + p.height - 3);
+                ctx.stroke();
+            }
+            // 两端铁箍
+            ctx.fillStyle = '#3f3f46';
+            roundRectPath(ctx, p.x + 2, p.y, 7, p.height, 2);
+            ctx.fill();
+            roundRectPath(ctx, p.x + p.width - 9, p.y, 7, p.height, 2);
+            ctx.fill();
+            // 铆钉
+            ctx.fillStyle = '#a1a1aa';
+            [p.x + 5.5, p.x + p.width - 5.5].forEach(nx => {
+                ctx.beginPath();
+                ctx.arc(nx, p.y + p.height / 2, 1.8, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        });
+    } else if (map === 'city') {
+        // 城市：混凝土检修台——水泥板 + 黄黑警示条纹顶沿 + 锚栓
+        platforms.forEach(p => {
+            const concrete = ctx.createLinearGradient(0, p.y, 0, p.y + p.height);
+            concrete.addColorStop(0, '#a8b3c0');
+            concrete.addColorStop(0.5, '#8e9aa8');
+            concrete.addColorStop(1, '#6e7a88');
+            ctx.fillStyle = concrete;
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 4);
+            ctx.fill();
+            // 黄黑警示条纹顶沿（工地风）
+            ctx.save();
+            roundRectPath(ctx, p.x, p.y, p.width, 6, 3);
+            ctx.clip();
+            ctx.fillStyle = '#facc15';
+            ctx.fillRect(p.x, p.y, p.width, 6);
+            ctx.fillStyle = '#27272a';
+            for (let sx = p.x - 6; sx < p.x + p.width + 6; sx += 16) {
+                ctx.beginPath();
+                ctx.moveTo(sx, p.y + 6);
+                ctx.lineTo(sx + 8, p.y);
+                ctx.lineTo(sx + 14, p.y);
+                ctx.lineTo(sx + 6, p.y + 6);
+                ctx.closePath();
+                ctx.fill();
+            }
+            ctx.restore();
+            // 混凝土接缝
+            ctx.strokeStyle = 'rgba(50, 58, 68, 0.4)';
+            ctx.lineWidth = 1.5;
+            for (let vx = p.x + 34; vx < p.x + p.width - 10; vx += 52) {
+                ctx.beginPath();
+                ctx.moveTo(vx, p.y + 8);
+                ctx.lineTo(vx, p.y + p.height - 3);
+                ctx.stroke();
+            }
+            // 锚栓
+            ctx.fillStyle = '#52525b';
+            for (let nx = p.x + 12; nx < p.x + p.width - 6; nx += 52) {
+                ctx.beginPath();
+                ctx.arc(nx, p.y + p.height - 6, 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
         });
     } else {
         // 霓虹都市：金属平台 + 青色霓虹边
@@ -3108,6 +4020,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
     if (self.heldWeapon === 'piercer') attackRange = 700;
     if (self.heldWeapon === 'aug') attackRange = 900;
     if (self.heldWeapon === 'gatling') attackRange = 900;
+    if (self.heldWeapon === 'revolver') attackRange = 900;
+    if (self.heldWeapon === 'sniper') attackRange = 1200; // 狙击枪射程最远
+    if (self.heldWeapon === 'sk12') attackRange = 420; // 霰弹枪贴脸才打得全，AI 会凑近了开火
     if (self.heldWeapon === 'gas') attackRange = 600;
     // 自创武器：近战用自己的 range，枪/投掷按远程处理
     const aiCustom = getCustom(self.heldWeapon);
@@ -4064,8 +4979,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
             return;
         }
 
-        // --- 加特林 & 自创枪械弹道：同 AUG 的直线单发弹，伤害/颜色取自各自参数 ---
-        if (proj.type === 'gatling' || (isCustomId(proj.type) && proj.blastRadius === undefined)) {
+        // --- 加特林 & 自创枪械 & 双持左轮 & SK12 鹿弹：直线单发弹，伤害/颜色取自各自参数 ---
+        if (proj.type === 'gatling' || proj.type === 'revolver' || proj.type === 'sk12' || (isCustomId(proj.type) && proj.blastRadius === undefined)) {
             if (!proj.trail) proj.trail = [];
             proj.trail.push({ ...proj.pos });
             if (proj.trail.length > 12) proj.trail.shift();
@@ -4078,7 +4993,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
             }
 
             // 伤害读发射时烘焙的 proj.damage（加特林默认 4，自创枪械默认 6）
-            const bulletDmg = proj.damage ?? (proj.type === 'gatling' ? 4 : 6);
+            const bulletDmg = proj.damage ?? (proj.type === 'gatling' ? 4 : proj.type === 'sk12' ? 7 : 6);
             const tint = proj.tint ?? '#ffd23a';
 
             entitiesRef.current.forEach(target => {
@@ -4092,6 +5007,47 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                     playHitSound();
                     spawnParticles(proj.pos.x, proj.pos.y, tint, 6, 6);
                     shakeRef.current = 2;
+                    if (target.health <= 0) {
+                        target.health = 0;
+                        target.isDead = true;
+                        target.isLoser = true;
+                        triggerWin(proj.ownerId);
+                    }
+                }
+            });
+            return;
+        }
+
+        // --- 狙击枪弹：高速穿透，命中后不消失，继续飞直到出界 ---
+        if (proj.type === 'sniper') {
+            if (!proj.trail) proj.trail = [];
+            proj.trail.push({ ...proj.pos });
+            if (proj.trail.length > 20) proj.trail.shift();
+
+            proj.pos.x += proj.vel.x;
+            proj.pos.y += proj.vel.y;
+
+            // 出界才消失（穿透期间不消失）
+            if (proj.pos.x < -50 || proj.pos.x > canvas.width + 50 || proj.pos.y < -50 || proj.pos.y > canvas.height + 50) {
+                proj.active = false;
+                return;
+            }
+
+            const bulletDmg = proj.damage ?? 100;
+            if (!proj.hitIds) proj.hitIds = [];
+
+            entitiesRef.current.forEach(target => {
+                if (target.id === proj.ownerId || target.isDead || !proj.active || !canDamage(target, proj.ownerId)) return;
+                if (proj.hitIds!.includes(target.id)) return; // 已穿透命中过，不再重复伤害
+                if (Math.abs(proj.pos.x - target.pos.x) < 22 &&
+                    proj.pos.y > target.pos.y - 75 && proj.pos.y < target.pos.y + 10) {
+                    proj.hitIds!.push(target.id);
+                    target.health -= bulletDmg;
+                    target.stunFrames = 12;
+                    target.vel.x += proj.vel.x > 0 ? 8 : -8;
+                    playHitSound();
+                    spawnParticles(proj.pos.x, proj.pos.y, '#22d3ee', 10, 8);
+                    shakeRef.current = 4;
                     if (target.health <= 0) {
                         target.health = 0;
                         target.isDead = true;
@@ -4462,6 +5418,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                     case 'aug':
                     case 'gas':
                     case 'gatling':
+                    case 'revolver':
+                    case 'sniper':
+                    case 'sk12':
                         entity.ammo = getBuiltinStats(item.type).ammo;
                         break;
                     default: {
@@ -4951,6 +5910,83 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
               });
               spawnParticles(mx, my, '#ffd23a', 3, 3, 0.3, 2); // 枪口火光
               entity.ammo--;
+          } else if (entity.heldWeapon === 'revolver') {
+              // == 双持左轮：双手各一把，同时射出两发子弹（一上一下错开），单发高伤、射速慢 ==
+              playShootSound();
+              const revSt = getBuiltinStats('revolver');
+              entity.attackCooldown = revSt.cooldown ?? 20; // 左轮扣扳机节奏慢
+              entity.vel.x += entity.facingRight ? -5 : 5; // 双枪后坐力大
+              const revSpeed = revSt.bulletSpeed ?? 24;
+              const dir = entity.facingRight ? 1 : -1;
+              // 两把枪的枪口：上下错开，避免两发完全重叠
+              const muzzles = [
+                  { x: entity.pos.x + dir * 30, y: entity.pos.y - 46 }, // 左手（略高）
+                  { x: entity.pos.x + dir * 30, y: entity.pos.y - 38 }, // 右手（略低）
+              ];
+              muzzles.forEach((m, i) => {
+                  projectilesRef.current.push({
+                      id: Math.random().toString(),
+                      type: 'revolver',
+                      pos: { x: m.x, y: m.y },
+                      vel: { x: dir * revSpeed, y: (Math.random() - 0.5) * 1.6 }, // 轻微散射
+                      ownerId: entity.id,
+                      width: 5, height: 4, active: true,
+                      damage: revSt.damage,
+                      trail: []
+                  });
+                  spawnParticles(m.x, m.y, '#f97316', 3, 3, 0.3, 2); // 枪口火光（橙色）
+              });
+              entity.ammo--; // 一次双发只扣 1 发弹药
+          } else if (entity.heldWeapon === 'sk12') {
+              // == SK12 散弹枪：泵动霰弹，一次喷出 6 颗鹿弹锥形散射，贴脸爆发之王 ==
+              playShootSound();
+              const skSt = getBuiltinStats('sk12');
+              entity.attackCooldown = skSt.cooldown ?? 40; // 泵动上膛，节奏偏慢
+              entity.vel.x += entity.facingRight ? -6 : 6; // 霰弹枪后坐力大
+              shakeRef.current = 5; // 开火震屏
+              const skSpeed = skSt.bulletSpeed ?? 26;
+              const dir = entity.facingRight ? 1 : -1;
+              const mx = entity.pos.x + dir * 32;
+              const my = entity.pos.y - 42;
+              for (let i = 0; i < 6; i++) {
+                  projectilesRef.current.push({
+                      id: Math.random().toString(),
+                      type: 'sk12',
+                      pos: { x: mx, y: my },
+                      // 初速略有快慢 + 纵向锥散射：近处糊一脸，远了散开打不全
+                      vel: { x: dir * (skSpeed - (i % 3) * 1.5), y: (Math.random() - 0.5) * 7 },
+                      ownerId: entity.id,
+                      width: 4, height: 3, active: true,
+                      damage: skSt.damage, // 单颗鹿弹伤害
+                      trail: []
+                  });
+              }
+              spawnParticles(mx, my, '#fb7185', 6, 4, 0.3, 2); // 枪口火光（玫红）
+              entity.ammo--; // 一次齐射只扣 1 发霰弹
+          } else if (entity.heldWeapon === 'sniper') {
+              // == 狙击枪：高速穿透弹，一枪穿一串敌人，单发超高伤、射速极慢 ==
+              playShootSound();
+              const snSt = getBuiltinStats('sniper');
+              entity.attackCooldown = snSt.cooldown ?? 45; // 极慢射速
+              entity.vel.x += entity.facingRight ? -7 : 7; // 大后坐力
+              shakeRef.current = 10; // 开镜射击震屏
+              const snSpeed = snSt.bulletSpeed ?? 40;
+              const dir = entity.facingRight ? 1 : -1;
+              const mx = entity.pos.x + dir * 34;
+              const my = entity.pos.y - 42;
+              projectilesRef.current.push({
+                  id: Math.random().toString(),
+                  type: 'sniper',
+                  pos: { x: mx, y: my },
+                  vel: { x: dir * snSpeed, y: 0 },
+                  ownerId: entity.id,
+                  width: 8, height: 4, active: true,
+                  damage: snSt.damage,
+                  hitIds: [],
+                  trail: []
+              });
+              spawnParticles(mx, my, '#22d3ee', 5, 4, 0.3, 2); // 青色枪口火光
+              entity.ammo--;
           } else if (customW && customW.template === 'gun') {
               // == 自创·子弹连发：仿 AUG 直弹，弹速/伤害/颜色来自武器库参数 ==
               playShootSound();
@@ -5210,6 +6246,14 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           drawSpaceBackground(ctx, canvas.width, canvas.height, frameRef.current);
       } else if (map === 'village') {
           drawVillageBackground(ctx, canvas.width, canvas.height, frameRef.current);
+      } else if (map === 'sky') {
+          drawSkyBackground(ctx, canvas.width, canvas.height, frameRef.current);
+      } else if (map === 'summit') {
+          drawSummitBackground(ctx, canvas.width, canvas.height, frameRef.current);
+      } else if (map === 'mine') {
+          drawMineBackground(ctx, canvas.width, canvas.height, frameRef.current);
+      } else if (map === 'city') {
+          drawCityBackground(ctx, canvas.width, canvas.height, frameRef.current);
       } else {
           drawNeonBackground(ctx, canvas.width, canvas.height, frameRef.current);
       }
@@ -5503,6 +6547,175 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
               ctx.ellipse(sx, sy, 3, 2, 0, 0, Math.PI * 2);
               ctx.fill();
           }
+      } else if (map === 'sky') {
+          // 云端地面：顶部蓬松白云凸起 + 白到淡蓝灰渐变云层 + 底部深灰蓝
+          const groundGrad = ctx.createLinearGradient(0, GROUND_Y, 0, canvas.height);
+          groundGrad.addColorStop(0, '#ffffff');
+          groundGrad.addColorStop(0.15, '#f1f5f9');
+          groundGrad.addColorStop(0.5, '#cbd5e1');
+          groundGrad.addColorStop(1, '#94a3b8');
+          ctx.fillStyle = groundGrad;
+          ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
+          // 顶部蓬松圆弧凸起
+          const bumpR = 16;
+          ctx.fillStyle = '#ffffff';
+          for (let x = -bumpR; x < canvas.width + bumpR; x += bumpR * 1.4) {
+              ctx.beginPath();
+              ctx.arc(x, GROUND_Y, bumpR, Math.PI, 0);
+              ctx.fill();
+          }
+          // 云层纹理：散布淡灰小圆点增加蓬松感
+          ctx.fillStyle = 'rgba(148, 163, 184, 0.35)';
+          for (let i = 0; i < 28; i++) {
+              const dx = ((i * 83 + 17) % 100) / 100 * canvas.width;
+              const dy = GROUND_Y + 14 + (i * 31 % 70);
+              ctx.beginPath();
+              ctx.arc(dx, dy, 2 + (i % 3), 0, Math.PI * 2);
+              ctx.fill();
+          }
+      } else if (map === 'summit') {
+          // 山顶岩台地面：顶部积雪 + 雪沿冰凌 + 青灰岩体渐变 + 裂纹与小石
+          const groundGrad = ctx.createLinearGradient(0, GROUND_Y, 0, canvas.height);
+          groundGrad.addColorStop(0, '#6b7280');
+          groundGrad.addColorStop(0.5, '#4b5563');
+          groundGrad.addColorStop(1, '#374151');
+          ctx.fillStyle = groundGrad;
+          ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
+          // 顶部积雪层
+          ctx.fillStyle = '#eef3fa';
+          ctx.fillRect(0, GROUND_Y - 5, canvas.width, 11);
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, GROUND_Y - 5, canvas.width, 4);
+          // 雪沿下垂的小冰凌
+          ctx.fillStyle = '#dfe7f2';
+          for (let x = 12; x < canvas.width; x += 46) {
+              ctx.beginPath();
+              ctx.moveTo(x - 4, GROUND_Y + 6);
+              ctx.lineTo(x + 4, GROUND_Y + 6);
+              ctx.lineTo(x, GROUND_Y + 13);
+              ctx.closePath();
+              ctx.fill();
+          }
+          // 岩体裂纹
+          ctx.strokeStyle = 'rgba(17, 24, 39, 0.45)';
+          ctx.lineWidth = 2;
+          for (let i = 0; i < 10; i++) {
+              const cx = ((i * 127 + 41) % 100) / 100 * canvas.width;
+              const cy = GROUND_Y + 26 + (i * 37 % 50);
+              ctx.beginPath();
+              ctx.moveTo(cx, cy);
+              ctx.lineTo(cx + (i % 2 ? 14 : -14), cy + 16);
+              ctx.lineTo(cx + (i % 2 ? 6 : -6), cy + 30);
+              ctx.stroke();
+          }
+          // 嵌在岩体里的小石子
+          ctx.fillStyle = 'rgba(156, 163, 175, 0.5)';
+          for (let i = 0; i < 16; i++) {
+              const dx = ((i * 89 + 23) % 100) / 100 * canvas.width;
+              const dy = GROUND_Y + 20 + (i * 41 % 60);
+              ctx.beginPath();
+              ctx.arc(dx, dy, 1.5 + (i % 3), 0, Math.PI * 2);
+              ctx.fill();
+          }
+      } else if (map === 'mine') {
+          // 矿井地面：碎石渣土 + 一条矿车铁轨（枕木 + 双钢轨）+ 散落矿石
+          const groundGrad = ctx.createLinearGradient(0, GROUND_Y, 0, canvas.height);
+          groundGrad.addColorStop(0, '#4a382a');
+          groundGrad.addColorStop(0.5, '#3a2c20');
+          groundGrad.addColorStop(1, '#241a12');
+          ctx.fillStyle = groundGrad;
+          ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
+          // 顶沿碎石棱
+          ctx.fillStyle = '#5b4636';
+          ctx.fillRect(0, GROUND_Y, canvas.width, 6);
+          ctx.fillStyle = '#6e563f';
+          for (let x = 0; x < canvas.width; x += 34) {
+              const gw = 10 + (x / 34 % 3) * 6;
+              ctx.fillRect(x, GROUND_Y - 2, gw, 4);
+          }
+          // 铁轨：枕木一排 + 两条钢轨（带高光）
+          const railTop = GROUND_Y + 26;
+          ctx.fillStyle = '#4a3524';
+          for (let x = 6; x < canvas.width; x += 42) {
+              ctx.fillRect(x, railTop, 26, 8);
+          }
+          ctx.fillStyle = '#71717a';
+          ctx.fillRect(0, railTop + 1, canvas.width, 3);
+          ctx.fillRect(0, railTop + 5, canvas.width, 3);
+          ctx.fillStyle = '#a1a1aa';
+          ctx.fillRect(0, railTop + 1, canvas.width, 1);
+          ctx.fillRect(0, railTop + 5, canvas.width, 1);
+          // 轨道下的道砟石子
+          ctx.fillStyle = 'rgba(120, 96, 72, 0.6)';
+          for (let i = 0; i < 20; i++) {
+              const dx = ((i * 73 + 11) % 100) / 100 * canvas.width;
+              const dy = railTop + 12 + (i * 17 % 14);
+              ctx.beginPath();
+              ctx.arc(dx, dy, 1.5 + (i % 3), 0, Math.PI * 2);
+              ctx.fill();
+          }
+          // 深处的零星矿点（微微发光的金色矿脉）
+          for (let i = 0; i < 7; i++) {
+              const gx = ((i * 151 + 47) % 100) / 100 * canvas.width;
+              const gy = GROUND_Y + 58 + (i * 29 % 34);
+              ctx.fillStyle = 'rgba(251, 191, 36, 0.35)';
+              ctx.beginPath();
+              ctx.arc(gx, gy, 2.5, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.fillStyle = 'rgba(253, 224, 71, 0.6)';
+              ctx.beginPath();
+              ctx.arc(gx, gy, 1.2, 0, Math.PI * 2);
+              ctx.fill();
+          }
+      } else if (map === 'city') {
+          // 城市街道：人行道缘石 + 沥青路面 + 白色虚线车道 + 斑马线 + 井盖
+          // 人行道（浅灰缘石）
+          ctx.fillStyle = '#b6bec8';
+          ctx.fillRect(0, GROUND_Y - 3, canvas.width, 10);
+          ctx.fillStyle = '#9aa4b0';
+          for (let x = 0; x < canvas.width; x += 60) { // 地砖缝
+              ctx.fillRect(x, GROUND_Y - 3, 2, 10);
+          }
+          // 沥青路面
+          const roadGrad = ctx.createLinearGradient(0, GROUND_Y + 7, 0, canvas.height);
+          roadGrad.addColorStop(0, '#4b5563');
+          roadGrad.addColorStop(0.5, '#3f4854');
+          roadGrad.addColorStop(1, '#2d333c');
+          ctx.fillStyle = roadGrad;
+          ctx.fillRect(0, GROUND_Y + 7, canvas.width, canvas.height - GROUND_Y - 7);
+          // 中央白色虚线
+          ctx.fillStyle = 'rgba(240, 244, 248, 0.85)';
+          const laneY = GROUND_Y + 7 + (canvas.height - GROUND_Y - 7) * 0.45;
+          for (let x = 10; x < canvas.width; x += 76) {
+              ctx.fillRect(x, laneY, 40, 4);
+          }
+          // 左侧斑马线（竖条）
+          ctx.fillStyle = 'rgba(240, 244, 248, 0.8)';
+          for (let x = 24; x < 150; x += 24) {
+              ctx.fillRect(x, GROUND_Y + 12, 12, canvas.height - GROUND_Y - 16);
+          }
+          // 井盖
+          ctx.fillStyle = '#27272a';
+          [canvas.width * 0.35, canvas.width * 0.72].forEach((mx, mi) => {
+              const my = GROUND_Y + 34 + mi * 22;
+              ctx.beginPath();
+              ctx.ellipse(mx, my, 13, 5, 0, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.strokeStyle = 'rgba(161, 161, 170, 0.5)';
+              ctx.lineWidth = 1;
+              ctx.beginPath();
+              ctx.ellipse(mx, my, 9, 3.2, 0, 0, Math.PI * 2);
+              ctx.stroke();
+          });
+          // 沥青补丁与细裂纹
+          ctx.fillStyle = 'rgba(24, 28, 34, 0.4)';
+          for (let i = 0; i < 8; i++) {
+              const px = ((i * 167 + 53) % 100) / 100 * canvas.width;
+              const py = GROUND_Y + 18 + (i * 43 % 55);
+              ctx.beginPath();
+              ctx.ellipse(px, py, 9 + (i % 3) * 5, 3 + (i % 2) * 2, i * 0.5, 0, Math.PI * 2);
+              ctx.fill();
+          }
       } else {
           ctx.fillStyle = '#1e293b';
           ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
@@ -5648,6 +6861,40 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
              ctx.fillRect(12, 2, 14, 2.5);
              ctx.fillStyle = '#8a5a30'; ctx.fillRect(-14, -4, 4, 8);   // 枪托
              ctx.fillStyle = '#fbbf24'; ctx.fillRect(-12, 4, 10, 6);  // 弹箱
+        } else if (item.type === 'revolver') {
+             // 双持左轮图标：两把左轮并排 + 转轮
+             ctx.fillStyle = '#3a3f44';
+             // 左枪
+             ctx.fillRect(-14, -4, 10, 6);
+             ctx.beginPath(); ctx.arc(-9, 2, 4, 0, Math.PI * 2); ctx.fill(); // 转轮
+             ctx.fillStyle = '#8a5a30'; ctx.fillRect(-14, 2, 4, 5); // 握把
+             // 右枪
+             ctx.fillStyle = '#3a3f44';
+             ctx.fillRect(4, -4, 10, 6);
+             ctx.beginPath(); ctx.arc(9, 2, 4, 0, Math.PI * 2); ctx.fill(); // 转轮
+             ctx.fillStyle = '#8a5a30'; ctx.fillRect(10, 2, 4, 5); // 握把
+        } else if (item.type === 'sniper') {
+             // 狙击枪图标：长枪管 + 瞄准镜 + 枪托
+             ctx.fillStyle = '#2f3e46';
+             ctx.fillRect(-16, -3, 30, 6);       // 长枪身
+             ctx.fillRect(14, -2, 12, 4);        // 枪管延伸
+             ctx.fillStyle = '#1f2a30';
+             ctx.fillRect(-4, -9, 8, 6);         // 瞄准镜
+             ctx.fillStyle = '#8a5a30';
+             ctx.fillRect(-16, 3, 6, 6);         // 枪托
+             ctx.fillStyle = '#22d3ee';
+             ctx.beginPath(); ctx.arc(26, 0, 2, 0, Math.PI * 2); ctx.fill(); // 枪口光点
+        } else if (item.type === 'sk12') {
+             // SK12 散弹枪图标：长枪管泵动霰弹枪 + 木托 + 红色霰弹
+             ctx.fillStyle = '#3a3f44';
+             ctx.fillRect(-16, -3, 26, 6);         // 机匣
+             ctx.fillStyle = '#22262a';
+             ctx.fillRect(8, -4, 16, 4);           // 长枪管
+             ctx.fillStyle = '#8a5a30';
+             ctx.fillRect(-16, 3, 7, 6);           // 木枪托
+             ctx.fillRect(2, 2, 8, 4);             // 泵动握把
+             ctx.fillStyle = '#fb7185';
+             ctx.fillRect(-6, -7, 4, 3);           // 红色霰弹点缀
         } else if (item.type === 'jetpack') {
              // 喷气背包图标：小罐体 + 绑带 + 一小束火焰（火焰一直轻轻跳，像在招手）
              ctx.fillStyle = '#94a3b8';
@@ -5829,9 +7076,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                return;
            }
 
-           if (proj.type === 'aug' || proj.type === 'gatling' || (isCustomId(proj.type) && proj.blastRadius === undefined)) {
-               // 直线弹（AUG / 加特林 / 自创枪械）：弹道拖尾 + 同心圆弹头（不用 shadowBlur）
-               const tint = proj.tint ?? (proj.type === 'gatling' ? '#ffd23a' : '#ffe28a');
+           if (proj.type === 'aug' || proj.type === 'gatling' || proj.type === 'revolver' || proj.type === 'sniper' || proj.type === 'sk12' || (isCustomId(proj.type) && proj.blastRadius === undefined)) {
+               // 直线弹（AUG / 加特林 / 双持左轮 / 狙击枪 / SK12 鹿弹 / 自创枪械）：弹道拖尾 + 同心圆弹头（不用 shadowBlur）
+               const tint = proj.tint ?? (proj.type === 'gatling' ? '#ffd23a' : proj.type === 'revolver' ? '#f97316' : proj.type === 'sniper' ? '#22d3ee' : proj.type === 'sk12' ? '#fb7185' : '#ffe28a');
                if (proj.trail && proj.trail.length > 1) {
                    ctx.globalAlpha = 0.55;
                    ctx.strokeStyle = tint;

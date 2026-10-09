@@ -29,6 +29,10 @@ const MAPS: { id: MapType; name: string; icon: string; active: string; ring: str
   { id: 'glacier', name: '冰川', icon: '🧊', active: 'from-cyan-500 to-teal-500 shadow-cyan-700', ring: 'border-teal-200' },
   { id: 'space', name: '太空', icon: '🪐', active: 'from-fuchsia-500 to-purple-600 shadow-fuchsia-700', ring: 'border-fuchsia-200' },
   { id: 'village', name: '村庄', icon: '🏡', active: 'from-orange-400 to-amber-500 shadow-orange-700', ring: 'border-orange-200' },
+  { id: 'sky', name: '天空', icon: '☁️', active: 'from-sky-400 to-blue-500 shadow-sky-700', ring: 'border-sky-200' },
+  { id: 'summit', name: '山顶', icon: '⛰️', active: 'from-slate-500 to-indigo-500 shadow-slate-700', ring: 'border-slate-200' },
+  { id: 'mine', name: '矿井', icon: '⛏️', active: 'from-amber-600 to-yellow-700 shadow-amber-800', ring: 'border-amber-200' },
+  { id: 'city', name: '城市', icon: '🏙️', active: 'from-slate-500 to-zinc-600 shadow-zinc-700', ring: 'border-zinc-200' },
 ];
 
 // 首页天空装饰配置：云朵都从右往左慢慢飘（负 delay 让打开页面时它们已经散开），

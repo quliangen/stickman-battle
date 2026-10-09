@@ -2,11 +2,11 @@
 
 ## 总览
 
-13 种可获取的内置武器（`WeaponType` 共 14 个，见 [types.ts:18](../types.ts#L18)；`atom_bomb` 已在 v1.9.0 移除，类型保留兜底）：
+16 种可获取的内置武器（`WeaponType` 共 17 个，见 [types.ts:18](../types.ts#L18)；`atom_bomb` 已在 v1.9.0 移除，类型保留兜底）：
 
 | 类型 | 武器 |
 |---|---|
-| 近战 | `sword`、`aug`、`gatling`（加特林：射速是 AUG 两倍、单发 4 伤、弹道散射、40 发） |
+| 近战 | `sword`、`aug`、`gatling`（加特林：射速是 AUG 两倍、单发 4 伤、弹道散射、40 发）、`revolver`（双持左轮：同时射两发、单发 12 伤、射速慢、12 发）、`sniper`（狙击枪：高速穿透弹、单发 100 伤、穿透多个敌人、5 发）、`sk12`（SK12 散弹枪：一次喷 6 颗鹿弹锥形散射、单颗 7 伤、贴脸全中 42 伤、8 发） |
 | 投掷/射击 | `bomb`、`laser`、`zeperion`（哉佩利敖光线） |
 | 状态机投射物 | `missile`（追踪导弹）、`dragon`（神龙）、`bomber`（轰炸机）、`pokemon`（闪电）、`c4`（遥控炸弹）、`piercer`（穿地弹）、`gas`（毒气） |
 
@@ -17,6 +17,7 @@
 - 每局最多掉落 `MAX_WEAPONS_PER_GAME = 6` 件；间隔 `WEAPON_SPAWN_INTERVAL = 900` 帧；存在时间 `WEAPON_LIFETIME = 15 * 60` 帧。
 - `missile` / `dragon` 是**稀有武器**，各自通过 `missileIndexRef` / `dragonIndexRef` 在洗牌后的生成序列中固定槽位（见 `initGame`）。原子弹（`atom_bomb`）原同属此机制，v1.9.0 起被移除，不再掉落，武器库中也不再显示。
 - 普通池由 `spawnFallingItem` 从 `weaponService.getDropPool()` 取：未被禁用的内置普通武器 + 自创武器 id。稀有槽位也要过禁用开关（`isBuiltinDisabled`），被禁用就退化成普通掉落。
+- **掉落权重** `DROP_WEIGHTS`（weaponService）：权重 = 这件武器在池里放几份，缺省 1 份（等概率）。目前 `sniper` / `sk12` 各 3 份，出现率约为其他武器的 3 倍。
 - 池子为空（全禁用且无自创）时兜底掉长剑，保证天上不会什么都不掉。
 - 玩家拾取判定：`update()` 中按实体与落物距离检测，`heldWeapon` 为空或 `ammo <= 0` 时可拾取；自创武器的弹药量在拾取 switch 的 `default` 分支从存档读。
 
@@ -68,6 +69,7 @@
 | bomb 手雷 | 25 伤 × 3 / 半径 180 |
 | aug | 6 伤 × 20 发 / 间隔 8 / 弹速 22 |
 | gatling | 4 伤 × 40 发 / 间隔 4 / 弹速 20（散射） |
+| sk12 散弹枪 | 单颗鹿弹 7 伤 × 6 颗/次（贴脸全中 42）× 8 发 / 间隔 40 / 弹速 26（锥形散射） |
 | laser 激光 | **30 伤 × 6 发 / 间隔 30（狙击定位，不再一击必杀）** |
 | zeperion | 40 伤 × 3 |
 | c4 | 40 伤 × 2 / 半径 220 |

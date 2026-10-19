@@ -216,7 +216,6 @@ export const playDragonRoar = () => {
 let jetNodes: {
     src: AudioBufferSourceNode;
     gain: GainNode;
-    lowGain: GainNode;
 } | null = null;
 let jetRefCount = 0;
 
@@ -263,7 +262,7 @@ export const startJetSound = () => {
 
         master.connect(ctx.destination);
         src.start();
-        jetNodes = { src, gain: master, lowGain: lpGain };
+        jetNodes = { src, gain: master };
     } catch (e) { }
 };
 

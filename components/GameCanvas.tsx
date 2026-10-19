@@ -4273,7 +4273,7 @@ const drawEntity = (ctx: CanvasRenderingContext2D, entity: Entity, frame: number
 
 const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setStats, setPlayers, gameMode, map }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const requestRef = useRef<number>();
+  const requestRef = useRef<number>(0);
   const frameRef = useRef<number>(0);
   
   const entitiesRef = useRef<Entity[]>([]);
@@ -4358,7 +4358,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
     if (self.team !== 'enemy' && !self.heldWeapon && fallingItemsRef.current.length > 0) {
       let minDist = 9999;
       fallingItemsRef.current.forEach(item => {
-        if (self.team === 'enemy' && item.type === 'jetpack') return;
         const d = Math.abs(item.pos.x - self.pos.x) + Math.abs(item.pos.y - self.pos.y);
         if (d < minDist) {
           minDist = d;
@@ -4636,9 +4635,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
         { size: 2, growth: 8,  life: 30, lw: 5,  a: 0.8,  d: 0.03, c: color },
         { size: 0, growth: 4,  life: 38, lw: 3,  a: 0.6,  d: 0.02, c: color },
     ];
-    rings.forEach((r, idx) => {
+    rings.forEach(r => {
         particlesRef.current.push({
-            id: 'sw' + Math.random().toString(36).slice(2) + idx,
             pos: { x, y },
             vel: { x: 0, y: 0 },
             life: r.life, maxLife: r.life,
@@ -5176,7 +5174,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
             }
 
             if (proj.dragonSegments && proj.dragonSegments.length > 0) {
-                proj.dragonSegments[0] = { ...proj.pos };
+                // 龙头跟随弹体：原地改坐标，不要每帧新建对象扔给 GC
+                proj.dragonSegments[0].x = proj.pos.x;
+                proj.dragonSegments[0].y = proj.pos.y;
                 for (let i = 1; i < proj.dragonSegments.length; i++) {
                     const current = proj.dragonSegments[i];
                     const prev = proj.dragonSegments[i-1];
@@ -5875,14 +5875,16 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           
           if (canPickUp) {
             const itemIndex = fallingItemsRef.current.findIndex(item => {
+                // 喷气背包不是武器：走上面专门的拾取块，不能被"拿在手上"
+                if (item.type === 'jetpack') return false;
                 const dx = Math.abs(entity.pos.x - (item.pos.x + item.width/2));
                 const dy = Math.abs((entity.pos.y - 35) - (item.pos.y + item.height/2));
                 return dx < 50 && dy < 60;
             });
-            
+
             if (itemIndex !== -1) {
                 const item = fallingItemsRef.current[itemIndex];
-                entity.heldWeapon = item.type;
+                entity.heldWeapon = item.type as AnyWeaponId; // findIndex 已排除 'jetpack'
                 entity.weaponDuration = WEAPON_LIFETIME; 
                 switch(item.type) {
                     // 内置武器：弹药量统一从武器库数值层读（默认值见 weaponService.BUILTIN_STATS，可在武器库「调一调」）
@@ -6708,13 +6710,14 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
     }
 
     // === 5. 粒子更新（移动 / 消亡 / 缩放 / 淡出） ===
-    for (let i = particlesRef.current.length - 1; i >= 0; i--) {
-      const p = particlesRef.current[i];
+    // 读写双指针原地压缩：以前每个消亡粒子都 splice 一次（O(n) 搬移），
+    // 爆炸高峰期一帧死几十上百个粒子时接近平方级开销（投射物早已同款处理，见上方压缩块）
+    const parts = particlesRef.current;
+    let keepP = 0;
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i];
       p.life--;
-      if (p.life <= 0) {
-        particlesRef.current.splice(i, 1);
-        continue;
-      }
+      if (p.life <= 0) continue;
       if (p.gravity !== undefined) p.vel.y += p.gravity;
       p.pos.x += p.vel.x;
       p.pos.y += p.vel.y;
@@ -6724,9 +6727,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
         const base = p.currentAlpha !== undefined ? p.currentAlpha : (p.life / p.maxLife);
         p.currentAlpha = Math.max(0, base - p.alphaDecay);
       }
+      parts[keepP++] = p;
     }
-    if (particlesRef.current.length > MAX_PARTICLES) {
-      particlesRef.current.splice(0, particlesRef.current.length - MAX_PARTICLES);
+    parts.length = keepP;
+    if (parts.length > MAX_PARTICLES) {
+      parts.splice(0, parts.length - MAX_PARTICLES);
     }
   };
 
@@ -7760,8 +7765,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
 
            if (proj.type === 'pokemon') {
                 if (proj.pokemonState === 'attacking') {
-                    // 闪电连线 (画在宝可梦后面)
-                    const target = entitiesRef.current.find(e => e.id !== proj.ownerId);
+                    // 闪电连线 (画在宝可梦后面)：目标判定与 update 一致——敌对且存活
+                    // （以前只排除自己，COOP 里会把电画到队友或尸体上）
+                    const target = findEnemy(proj.ownerId);
                     if (target) {
                         ctx.strokeStyle = '#ffff00';
                         ctx.lineWidth = 3;
@@ -7930,7 +7936,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
            } else if (proj.type === 'atom_bomb') {
                ctx.fillStyle = '#333'; ctx.beginPath(); ctx.arc(0,0,12,0,Math.PI*2); ctx.fill();
                ctx.fillStyle = 'yellow'; ctx.fillText('☢', -4, 4);
-           } else if (proj.type === 'missile' && proj.active) {
+           } else if (proj.type === 'missile') {
                const angle = Math.atan2(proj.vel.y, proj.vel.x);
                ctx.rotate(angle);
                ctx.fillStyle = '#166534'; ctx.fillRect(-10, -4, 20, 8);

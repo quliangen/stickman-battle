@@ -2,13 +2,13 @@
 
 ## 总览
 
-16 种可获取的内置武器（`WeaponType` 共 17 个，见 [types.ts:18](../types.ts#L18)；`atom_bomb` 已在 v1.9.0 移除，类型保留兜底）：
+17 种可获取的内置武器（`WeaponType` 共 18 个，见 [types.ts:18](../types.ts#L18)；`atom_bomb` 已在 v1.9.0 移除，类型保留兜底）：
 
 | 类型 | 武器 |
 |---|---|
 | 近战 | `sword`、`aug`、`gatling`（加特林：射速是 AUG 两倍、单发 4 伤、弹道散射、40 发）、`revolver`（双持左轮：同时射两发、单发 12 伤、射速慢、12 发）、`sniper`（狙击枪：高速穿透弹、单发 100 伤、穿透多个敌人、5 发）、`sk12`（SK12 散弹枪：一次喷 6 颗鹿弹锥形散射、单颗 7 伤、贴脸全中 42 伤、8 发） |
 | 投掷/射击 | `bomb`、`laser`、`zeperion`（哉佩利敖光线） |
-| 状态机投射物 | `missile`（追踪导弹）、`dragon`（神龙）、`bomber`（轰炸机）、`pokemon`（闪电）、`c4`（遥控炸弹）、`piercer`（穿地弹）、`gas`（毒气） |
+| 状态机投射物 | `missile`（追踪导弹）、`dragon`（神龙）、`bomber`（轰炸机）、`pokemon`（闪电）、`c4`（遥控炸弹）、`piercer`（穿地弹）、`gas`（毒气）、`artillery`（炮兵齐射） |
 
 另外小朋友可以在**武器库**里做自创武器（见下文「武器库与自创武器」），自创 id 以 `cw_` 开头，和内置类型一起组成 `AnyWeaponId`。
 
@@ -32,6 +32,7 @@
 - `c4State: 'flying' | 'planted'`（再次按攻击键遥控引爆，`detonateC4`）
 - `piercerState: 'flying' | 'burrowing' | 'erupting'`
 - `gasState: 'flying' | 'cloud'`
+- `artilleryState: 'marking' | 'firing'`（炮兵齐射：地面红圈标记 80 帧 → 5 颗炮弹从天上齐落，炮弹复用手雷爆炸分支）
 
 新增强行为投射物时沿用此模式，并把可选字段加到 `Projectile` 接口。
 
@@ -76,6 +77,7 @@
 | piercer | 30 伤 × 3 / 半径 200 |
 | gas | 每跳 1 伤（8 帧一跳）× 2 / 半径 120 |
 | bomber | **空投小炸弹 20 伤 / 半径 120 × 3 颗**（与整颗手雷区分） |
+| artillery 炮兵齐射 | 每颗炮弹 18 伤 / 半径 110 × 5 颗 × 2 次（先标记 80 帧再落弹，可走位躲） |
 | pokemon | 20 伤 × 1（+ 麻痹 40 帧） |
 | missile | 35 伤 × 2（追踪） |
 | dragon | 每口 5 伤 × 5 口 |

@@ -7,7 +7,7 @@ export enum GameState {
 
 export type GameMode = 'PVE' | 'PVP' | 'COOP';
 
-export type MapType = 'neon' | 'forest' | 'desert' | 'ocean' | 'volcano' | 'night' | 'snow' | 'prairie' | 'glacier' | 'space' | 'village' | 'sky' | 'summit' | 'mine' | 'city';
+export type MapType = 'neon' | 'forest' | 'desert' | 'ocean' | 'volcano' | 'night' | 'snow' | 'prairie' | 'glacier' | 'space' | 'village' | 'sky' | 'summit' | 'mine' | 'city' | 'cave';
 
 export interface Vector {
   x: number;
@@ -15,7 +15,7 @@ export interface Vector {
 }
 
 // 移除了 stick, blade, pistol，新增 bomber, pokemon, zeperion, gatling
-export type WeaponType = 'bomb' | 'sword' | 'atom_bomb' | 'missile' | 'dragon' | 'bomber' | 'pokemon' | 'laser' | 'zeperion' | 'c4' | 'piercer' | 'aug' | 'gas' | 'gatling' | 'revolver' | 'sniper' | 'sk12';
+export type WeaponType = 'bomb' | 'sword' | 'atom_bomb' | 'missile' | 'dragon' | 'bomber' | 'pokemon' | 'laser' | 'zeperion' | 'c4' | 'piercer' | 'aug' | 'gas' | 'gatling' | 'revolver' | 'sniper' | 'sk12' | 'artillery';
 
 /*
   武器库（WeaponArsenal）里小朋友自创的武器。
@@ -71,8 +71,8 @@ export interface Platform {
   height: number;
 }
 
-// 障碍类型：spike = 伤害陷阱（尖刺/岩浆）/ block = 实心阻挡（箱子、柱子）/ mover = 移动平台
-export type ObstacleKind = 'spike' | 'block' | 'mover';
+// 障碍类型：spike = 伤害陷阱（尖刺/岩浆）/ block = 实心阻挡（箱子、柱子）/ mover = 移动平台 / turret = 自动炮台
+export type ObstacleKind = 'spike' | 'block' | 'mover' | 'turret';
 
 export interface Obstacle {
   kind: ObstacleKind;
@@ -89,6 +89,12 @@ export interface Obstacle {
   phase?: number;
   dx?: number;
   dy?: number;
+  // 自动炮台专用：蓄力进度（帧）/ 炮管当前角度 / 开火后坐量（绘制用）
+  charge?: number;
+  aimAngle?: number;
+  recoil?: number;
+  // 隐蔽地刺专用：弹出程度 0~1（0 = 缩进地里只露地缝，1 = 完全弹出）
+  extend?: number;
 }
 
 export interface Entity {
@@ -184,6 +190,11 @@ export interface Projectile {
   gasState?: 'flying' | 'cloud';
   gasTimer?: number;
   gasRadius?: number;
+
+  // 炮兵齐射特有属性
+  artilleryState?: 'marking' | 'firing'; // 标记锁定中 → 炮弹已落下
+  artilleryMarks?: Vector[]; // 锁定的炮击点（开火瞬间的快照，给对面走位躲避的机会）
+  artilleryTimer?: number;   // 已标记帧数
 
   // 轨迹
   trail?: Vector[]; 

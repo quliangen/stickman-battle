@@ -33,6 +33,7 @@ const MAPS: { id: MapType; name: string; icon: string; active: string; ring: str
   { id: 'summit', name: '山顶', icon: '⛰️', active: 'from-slate-500 to-indigo-500 shadow-slate-700', ring: 'border-slate-200' },
   { id: 'mine', name: '矿井', icon: '⛏️', active: 'from-amber-600 to-yellow-700 shadow-amber-800', ring: 'border-amber-200' },
   { id: 'city', name: '城市', icon: '🏙️', active: 'from-slate-500 to-zinc-600 shadow-zinc-700', ring: 'border-zinc-200' },
+  { id: 'cave', name: '矿洞', icon: '💎', active: 'from-violet-500 to-purple-600 shadow-violet-700', ring: 'border-violet-200' },
 ];
 
 // 首页天空装饰配置：云朵都从右往左慢慢飘（负 delay 让打开页面时它们已经散开），
@@ -402,26 +403,32 @@ const MainMenu: React.FC<MainMenuProps> = ({ setGameState, setGameMode, map, set
 
           {/* 左：选择地图 */}
           <MenuCard icon="🗺️" title="选择地图" delay={0.25}>
-            {/* 地图自动换行排布，最后一行居中 */}
-            <div className="flex flex-wrap justify-center content-center gap-2 flex-1">
-              {MAPS.map(m => {
-                const selected = map === m.id;
-                return (
-                  <motion.button
-                    key={m.id}
-                    whileHover={{ scale: 1.06, y: -3 }}
-                    whileTap={{ scale: 0.94 }}
-                    onClick={() => setMap(m.id)}
-                    className={`basis-[calc(33.333%-0.34rem)] flex flex-col items-center gap-1 py-2 rounded-2xl border-4 transition-all
-                      ${selected
-                        ? `bg-gradient-to-b ${m.active} ${m.ring} shadow-[0_5px_0_0_rgba(0,0,0,0.25)]`
-                        : 'bg-white/40 border-white/40 hover:bg-white/60'}`}
-                  >
-                    <span className="text-3xl">{m.icon}</span>
-                    <span className={`text-sm font-bold ${selected ? 'text-white' : 'text-slate-700'}`}>{m.name}</span>
-                  </motion.button>
-                );
-              })}
+            {/* 16 张图一次摆不下：固定高三行多、纵向滚动，露出一截第 4 行 + 底部渐隐，提示还能往下滚 */}
+            <div className="relative flex-1">
+              <div className="map-scroll max-h-[17.2rem] overflow-y-auto overscroll-contain pr-1">
+                <div className="flex flex-wrap justify-center content-start gap-2">
+                  {MAPS.map(m => {
+                    const selected = map === m.id;
+                    return (
+                      <motion.button
+                        key={m.id}
+                        whileHover={{ scale: 1.06, y: -3 }}
+                        whileTap={{ scale: 0.94 }}
+                        onClick={() => setMap(m.id)}
+                        className={`basis-[calc(33.333%-0.34rem)] flex flex-col items-center gap-1 py-2 rounded-2xl border-4 transition-all
+                          ${selected
+                            ? `bg-gradient-to-b ${m.active} ${m.ring} shadow-[0_5px_0_0_rgba(0,0,0,0.25)]`
+                            : 'bg-white/40 border-white/40 hover:bg-white/60'}`}
+                      >
+                        <span className="text-3xl">{m.icon}</span>
+                        <span className={`text-sm font-bold ${selected ? 'text-white' : 'text-slate-700'}`}>{m.name}</span>
+                      </motion.button>
+                    );
+                  })}
+                </div>
+              </div>
+              {/* 底部渐隐：还能往下滚的视觉提示 */}
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-9 bg-gradient-to-t from-white/50 to-transparent rounded-b-2xl" />
             </div>
           </MenuCard>
 

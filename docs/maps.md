@@ -2,12 +2,12 @@
 
 ## 总览
 
-15 张地图（`MapType`）：`neon`（霓虹都市/星空+城市天际线）、`forest`（森林）、`desert`（沙漠）、`ocean`（海洋）、`volcano`（火山）、`night`（黑夜/星空+月亮+萤火虫+夜色草地）、`snow`（雪原/淡日+雪山+雪松+飘雪）、`prairie`（草原/蓝天白云+缓丘+风车+野花+蝴蝶+草浪）、`glacier`（冰川/极光+冰川崖+远海浮冰+企鹅+冰晶）、`space`（太空/星云+带环行星+陨石+UFO+流星+月面）、`village`（村庄/暖蓝天空+木屋烟囱+尖桩栅栏+母鸡+小鸟）、`sky`（天空/湛蓝天空+旋转太阳+彩虹+多层飘云+热气球+飞鸟+浮空岛）、`summit`（山顶/破晓天空+旭日+雪峰剪影+云海+盘旋雄鹰+山顶旗帜+吹雪）、`mine`（矿井/暗褐岩洞+发光水晶+钟乳石+摇曳矿灯+木支架+蝙蝠+滴水+矿车铁轨）、`city`（城市/白天都市：湛蓝晴空+摩天楼窗格+水塔闪灯天线+摆动塔吊+高架车流+飞机尾烟+街道斑马线）。
+16 张地图（`MapType`）：`neon`（霓虹都市/星空+城市天际线）、`forest`（森林）、`desert`（沙漠）、`ocean`（海洋）、`volcano`（火山）、`night`（黑夜/星空+月亮+萤火虫+夜色草地）、`snow`（雪原/淡日+雪山+雪松+飘雪）、`prairie`（草原/蓝天白云+缓丘+风车+野花+蝴蝶+草浪）、`glacier`（冰川/极光+冰川崖+远海浮冰+企鹅+冰晶）、`space`（太空/星云+带环行星+陨石+UFO+流星+月面）、`village`（村庄/暖蓝天空+木屋烟囱+尖桩栅栏+母鸡+小鸟）、`sky`（天空/湛蓝天空+旋转太阳+彩虹+多层飘云+热气球+飞鸟+浮空岛）、`summit`（山顶/破晓天空+旭日+雪峰剪影+云海+盘旋雄鹰+山顶旗帜+吹雪）、`mine`（矿井/暗褐岩洞+发光水晶+钟乳石+摇曳矿灯+木支架+蝙蝠+滴水+矿车铁轨）、`city`（城市/白天都市：湛蓝晴空+摩天楼窗格+水塔闪灯天线+摆动塔吊+高架车流+飞机尾烟+街道斑马线）、`cave`（矿洞/天然水晶溶洞：深紫蓝岩壁+裂口光束浮尘+巨型脉动水晶簇+石笋+发光蘑菇+萤火光尘+地下暗河，与人工矿道风的 `mine` 区分）。
 
 每张地图由两部分组成：
 
 1. **平台数组常量**：`NEON_PLATFORMS` / `FOREST_PLATFORMS` / ... （[GameCanvas.tsx:521](../components/GameCanvas.tsx#L521)），类型为 `Platform { x, y, width, height }`，通过 `getPlatforms(map, canvasWidth)` 选取。常量里的坐标是 **1280 × 600 基准坐标系**下的设计值，`getPlatforms` 会按当前画布宽高自动缩放（详见 [architecture.md](architecture.md) 的"世界尺寸自适应"）。
-2. **背景绘制函数**：`drawNeonBackground`（neon 星空 + 城市天际线）/ `drawForestBackground` / `drawDesertBackground` / `drawOceanBackground` / `drawVolcanoBackground` / `drawNightBackground`（黑夜）/ `drawSnowBackground`（雪原）/ `drawPrairieBackground`（草原）/ `drawGlacierBackground`（冰川）/ `drawSpaceBackground`（太空）/ `drawVillageBackground`（村庄）/ `drawSkyBackground`（天空）/ `drawSummitBackground`（山顶）/ `drawMineBackground`（矿井）/ `drawCityBackground`（城市），在 `draw()` 中按当前地图调用。
+2. **背景绘制函数**：`drawNeonBackground`（neon 星空 + 城市天际线）/ `drawForestBackground` / `drawDesertBackground` / `drawOceanBackground` / `drawVolcanoBackground` / `drawNightBackground`（黑夜）/ `drawSnowBackground`（雪原）/ `drawPrairieBackground`（草原）/ `drawGlacierBackground`（冰川）/ `drawSpaceBackground`（太空）/ `drawVillageBackground`（村庄）/ `drawSkyBackground`（天空）/ `drawSummitBackground`（山顶）/ `drawMineBackground`（矿井）/ `drawCityBackground`（城市）/ `drawCaveBackground`（矿洞），在 `draw()` 中按当前地图调用。
 
 ## 每局随机地形
 
@@ -16,8 +16,9 @@
 | 元素 | 数量 | 说明 |
 |---|---|---|
 | 追加平台 | 1~3 | 落在 `TIERS`（470/400/320/240）四个高度层级上 |
-| 伤害陷阱 `spike` | 1~2 | 贴地尖刺，踩到掉 `SPIKE_DAMAGE` 血并被弹开，`SPIKE_COOLDOWN` 帧内不会重复判定 |
+| 伤害陷阱 `spike` | 1~2 | 隐蔽地刺：平时缩进地里只露一道暗色地缝（细心能提前发现），有角色进入 90px 感应区时"唰"地弹出（约 5 帧，带音效+碎土），人走后约 33 帧慢慢缩回；`extend` 记录弹出程度 0~1，弹出过半才有杀伤——踩到掉 `SPIKE_DAMAGE` 血并被弹开，`SPIKE_COOLDOWN` 帧内不会重复判定 |
 | 实心阻挡 `block` | 1~2 | 贴地箱子，顶面可站立，侧面会把人推开 |
+| 自动炮台 `turret` | 1 | 中立机关炮塔：约一半概率架在 ≥110px 宽的静态平台（固定/追加）上，否则落地；移动平台不架。索敌 430px 内最近的角色，蓄力约 1.8 秒（警示灯闪红+炮口泛光）后打一发 7 伤橙色弹（`ownerId: ''`，速度比跑步慢，跑得开）；COOP 的怪物也照打 |
 | 移动平台 `mover` | 0~2 | 横向或纵向往返，站在上面会被带着走 |
 
 关键约定：

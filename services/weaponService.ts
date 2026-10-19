@@ -42,6 +42,7 @@ export const BUILTIN_WEAPONS: BuiltinMeta[] = [
   { type: 'piercer',   name: '穿地弹',     emoji: '🕳️', desc: '钻进地里再从敌人脚下喷出' },
   { type: 'gas',       name: '毒气弹',     emoji: '☠️', desc: '落地生成一片毒气' },
   { type: 'bomber',    name: '轰炸机',     emoji: '🛩️', desc: '呼叫空袭炸一条线' },
+  { type: 'artillery', name: '炮兵齐射',   emoji: '📡', desc: '遥控锁定敌人位置，一波炮弹从天而降' },
   { type: 'pokemon',   name: '皮卡丘',     emoji: '⚡', desc: '追着敌人放电' },
   { type: 'missile',   name: '巡航导弹',   emoji: '🚀', desc: '追踪敌人，稀有武器', rare: true },
   { type: 'dragon',    name: '神龙',       emoji: '🐉', desc: '召唤神龙撕咬，稀有武器', rare: true },
@@ -69,7 +70,7 @@ const DROP_WEIGHTS: Partial<Record<WeaponType, number>> = {
   - 长剑 = 近战持续；AUG = 基准射手；加特林 = 泼洒压制；SK12 = 近距霰弹爆发
   - 炸弹 = 爆发 AoE；激光 = 狙击（瞬发高伤但射得慢，不再是即死）；哉佩利敖 = 重型光束+爆点
   - C4 = 遥控陷阱；穿地弹 = 反蹲；毒气弹 = 区域封锁
-  - 轰炸机 = 三连小炸（区别于手雷的大单发）；皮卡丘 = 刺客单次+瘫痪
+  - 轰炸机 = 三连小炸（区别于手雷的大单发）；皮卡丘 = 刺客单次+瘫痪；炮兵齐射 = 延迟齐射（标记告警，可走位躲）
   - 导弹/神龙 = 稀有追踪（原子弹已在 v1.9.0 从游戏移除，类型与休眠数值保留兜底）
 */
 export const BUILTIN_STATS: Record<WeaponType, WeaponStats> = {
@@ -86,6 +87,7 @@ export const BUILTIN_STATS: Record<WeaponType, WeaponStats> = {
   piercer:   { damage: 30, ammo: 3,  blastRadius: 200 },
   gas:       { damage: 1,  ammo: 2,  blastRadius: 120 }, // damage = 每 8 帧掉 1 血
   bomber:    { damage: 20, ammo: 1,  blastRadius: 120 }, // damage/blastRadius = 空投小炸弹的
+  artillery: { damage: 18, ammo: 2,  blastRadius: 110 }, // damage/blastRadius = 每颗炮弹的（一次齐射 5 颗，先标记再落弹）
   pokemon:   { damage: 20, ammo: 1 },
   missile:   { damage: 35, ammo: 2 },
   dragon:    { damage: 5,  ammo: 1 },                    // damage = 每口咬伤（共 5 口）
@@ -125,6 +127,7 @@ export const BUILTIN_STAT_FIELDS: Record<WeaponType, { key: WeaponStatKey; label
   piercer:   [{ key: 'damage', label: '伤害', icon: '💥' }, { key: 'blastRadius', label: '爆炸半径', icon: '🎯' }, { key: 'ammo', label: '数量', icon: '🔢' }],
   gas:       [{ key: 'damage', label: '每跳伤害', icon: '💥' }, { key: 'blastRadius', label: '毒气半径', icon: '🎯' }, { key: 'ammo', label: '数量', icon: '🔢' }],
   bomber:    [{ key: 'damage', label: '每颗伤害', icon: '💥' }, { key: 'blastRadius', label: '爆炸半径', icon: '🎯' }, { key: 'ammo', label: '次数', icon: '🔢' }],
+  artillery: [{ key: 'damage', label: '每颗伤害', icon: '💥' }, { key: 'blastRadius', label: '爆炸半径', icon: '🎯' }, { key: 'ammo', label: '次数', icon: '🔢' }],
   pokemon:   [{ key: 'damage', label: '伤害', icon: '💥' }, { key: 'ammo', label: '次数', icon: '🔢' }],
   missile:   [{ key: 'damage', label: '伤害', icon: '💥' }, { key: 'ammo', label: '数量', icon: '🔢' }],
   dragon:    [{ key: 'damage', label: '每口伤害', icon: '💥' }, { key: 'ammo', label: '次数', icon: '🔢' }],

@@ -1151,7 +1151,14 @@ const GLACIER_CRYSTALS: GlacierCrystal[] = (() => {
     }));
 })();
 
-// 极光带：沿一条正弦曲线画柔光宽带，颜色随水平位置渐变
+/*
+  极光帘幕：一列列竖直光条拼出的光幕。
+  真实极光的三个特征，缺一不可：
+  1. 帘幕射线——光幕由明暗相间的竖纹组成，并缓慢漂移（两层反向正弦叠出"噪声"）；
+  2. 底边亮带——亮度集中在下缘，向上快速衰减（竖直渐变在 0.85 处最亮）；
+  3. 起伏波动——底边沿多重正弦缓慢扭动，光幕高度本身也在呼吸。
+  旧版是"实心色带 + 水平渐变"，边缘生硬、没有射线结构，所以一眼假。
+*/
 const drawAurora = (
     ctx: CanvasRenderingContext2D,
     w: number,
@@ -1160,24 +1167,35 @@ const drawAurora = (
     baseY: number,
     amp: number,
     phaseShift: number,
-    c1: string,
-    c2: string
+    c1: string,      // 'r,g,b'：底边亮带主色
+    c2: string,      // 'r,g,b'：光幕上部副色
+    strength: number // 整体透明度上限
 ) => {
-    const grad = ctx.createLinearGradient(0, 0, w, 0);
-    grad.addColorStop(0, c1);
-    grad.addColorStop(0.5, c2);
-    grad.addColorStop(1, c1);
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.moveTo(0, baseY - 30);
-    for (let x = 0; x <= w; x += 24) {
-        ctx.lineTo(x, baseY + Math.sin(x * 0.006 + frame * 0.01 + phaseShift) * amp);
+    const step = 9; // 光条宽度
+    for (let x = 0; x < w + step; x += step) {
+        // 底边：三重正弦叠加出不规则的自然起伏
+        const edge = baseY
+            + Math.sin(x * 0.006 + frame * 0.008 + phaseShift) * amp
+            + Math.sin(x * 0.017 - frame * 0.013 + phaseShift * 2.1) * amp * 0.45
+            + Math.sin(x * 0.029 + frame * 0.021 + phaseShift * 0.6) * amp * 0.2;
+        // 帘幕射线：明暗相间的竖纹缓缓流动
+        const ray = Math.max(0, 0.55
+            + 0.32 * Math.sin(x * 0.021 + frame * 0.017 + phaseShift)
+            + 0.18 * Math.sin(x * 0.046 - frame * 0.029 + phaseShift * 1.7));
+        const a = strength * ray;
+        if (a < 0.012) continue; // 太暗的条跳过，省一次渐变
+        // 光幕高度也在缓慢呼吸
+        const curtainH = h * 0.24 * (0.75 + 0.25 * Math.sin(x * 0.008 + frame * 0.011 + phaseShift));
+        const topY = edge - curtainH;
+        // 竖直渐变：顶透明 → 中部副色 → 底部主色最亮（底边亮带）
+        const g = ctx.createLinearGradient(0, topY, 0, edge);
+        g.addColorStop(0, `rgba(${c2}, 0)`);
+        g.addColorStop(0.45, `rgba(${c2}, ${a * 0.45})`);
+        g.addColorStop(0.85, `rgba(${c1}, ${a})`);
+        g.addColorStop(1, `rgba(${c1}, ${a * 0.9})`);
+        ctx.fillStyle = g;
+        ctx.fillRect(x, topY, step + 1, curtainH);
     }
-    for (let x = w; x >= 0; x -= 24) {
-        ctx.lineTo(x, baseY + 26 + Math.sin(x * 0.005 + frame * 0.012 + phaseShift + 1) * amp * 0.7);
-    }
-    ctx.closePath();
-    ctx.fill();
 };
 
 // 小企鹅：黑背白肚 + 黄围巾，站定时左右微微晃
@@ -1268,12 +1286,18 @@ const drawGlacierBackground = (
     }
     ctx.globalAlpha = 1;
 
-    // 3. 极光：两条半透明光带缓缓流动（screen 混合才会发光）
+    // 3. 极光：两层帘幕光带缓缓流动（screen 混合才会发光）
     ctx.globalCompositeOperation = 'screen';
-    drawAurora(ctx, w, h, frame, h * 0.2, h * 0.05, 0,
-        'rgba(74, 222, 128, 0.16)', 'rgba(125, 211, 252, 0.2)');
-    drawAurora(ctx, w, h, frame, h * 0.3, h * 0.04, 2.4,
-        'rgba(167, 139, 250, 0.14)', 'rgba(110, 231, 183, 0.18)');
+    // 先垫一层大面积的呼吸微光，模拟极光的大气散射
+    const auroraWash = ctx.createLinearGradient(0, h * 0.05, 0, h * 0.55);
+    auroraWash.addColorStop(0, 'rgba(110, 231, 183, 0)');
+    auroraWash.addColorStop(0.65, `rgba(110, 231, 183, ${0.05 + 0.02 * Math.sin(frame * 0.01)})`);
+    auroraWash.addColorStop(1, 'rgba(110, 231, 183, 0)');
+    ctx.fillStyle = auroraWash;
+    ctx.fillRect(0, 0, w, h * 0.55);
+    // 主帘幕（低、亮、绿）+ 副帘幕（高、淡、紫）
+    drawAurora(ctx, w, h, frame, h * 0.32, h * 0.045, 0, '74, 222, 128', '45, 212, 191', 0.42);
+    drawAurora(ctx, w, h, frame, h * 0.22, h * 0.035, 2.4, '167, 139, 250', '125, 211, 252', 0.26);
     ctx.globalCompositeOperation = 'source-over';
 
     // 4. 远海与冰架：深色海平线 + 锯齿状冰崖剪影
@@ -2333,6 +2357,201 @@ const drawMineBackground = (
     }
 };
 
+// === 矿洞背景 ===
+/*
+  天然水晶溶洞：深紫蓝岩壁 + 顶部裂口洒下的光束（浮尘在光里漂）+
+  岩壁上脉动的巨型水晶簇 + 石笋 + 发光蘑菇 + 四处缓漂的萤火光尘。
+  和「矿井」（人工矿道：木支架/矿灯/铁轨，暖褐色调）区分开——
+  这里没有人造的东西，主打"埋在地底的天然水晶宫"，冷紫色调。
+*/
+const drawCaveBackground = (
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    frame: number
+) => {
+    // 1. 洞穴底色：深紫蓝岩壁，越深越暗，中央留一点微弱的冷光
+    const cave = ctx.createLinearGradient(0, 0, 0, h);
+    cave.addColorStop(0, '#171325');
+    cave.addColorStop(0.5, '#221b36');
+    cave.addColorStop(1, '#0e0b18');
+    ctx.fillStyle = cave;
+    ctx.fillRect(0, 0, w, h);
+    const ambient = ctx.createRadialGradient(w * 0.5, h * 0.4, 0, w * 0.5, h * 0.4, w * 0.5);
+    ambient.addColorStop(0, 'rgba(150, 130, 255, 0.08)');
+    ambient.addColorStop(1, 'rgba(150, 130, 255, 0)');
+    ctx.fillStyle = ambient;
+    ctx.fillRect(0, 0, w, h);
+
+    // 2. 岩壁纹理：横贯的深色层线 + 嵌在壁上的石块（紫灰调）
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.lineWidth = 3;
+    for (let i = 0; i < 7; i++) {
+        const ly = (i * 97 + 52) / 640 * h;
+        ctx.beginPath();
+        ctx.moveTo(0, ly);
+        for (let x = 0; x <= w; x += 80) {
+            ctx.lineTo(x, ly + Math.sin(x * 0.012 + i * 2.4) * 7);
+        }
+        ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(88, 74, 122, 0.4)';
+    for (let i = 0; i < 16; i++) {
+        const rx = ((i * 149 + 41) % 100) / 100 * w;
+        const ry = ((i * 67 + 23) % 100) / 100 * h * 0.85;
+        ctx.beginPath();
+        ctx.ellipse(rx, ry, 6 + (i % 4) * 3, 4 + (i % 3) * 2, i * 0.8, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // 3. 顶部裂口光束：洞顶一道裂缝，两束天光斜洒下来，浮尘在光里慢慢飘
+    const crackX = w * 0.5;
+    ctx.fillStyle = '#0a0812';
+    ctx.beginPath();
+    ctx.moveTo(crackX - w * 0.09, 0);
+    ctx.lineTo(crackX + w * 0.07, 0);
+    ctx.lineTo(crackX + w * 0.03, h * 0.03);
+    ctx.lineTo(crackX - w * 0.05, h * 0.025);
+    ctx.closePath();
+    ctx.fill();
+    [{ x: 0.47, tilt: 0.05, alpha: 0.16 }, { x: 0.56, tilt: -0.04, alpha: 0.1 }].forEach(b => {
+        const topX = b.x * w;
+        const botX = topX + b.tilt * w;
+        const beam = ctx.createLinearGradient(topX, 0, botX, h * 0.85);
+        beam.addColorStop(0, `rgba(190, 210, 255, ${b.alpha})`);
+        beam.addColorStop(1, 'rgba(190, 210, 255, 0)');
+        ctx.fillStyle = beam;
+        ctx.beginPath();
+        ctx.moveTo(topX - w * 0.02, 0);
+        ctx.lineTo(topX + w * 0.02, 0);
+        ctx.lineTo(botX + w * 0.055, h * 0.85);
+        ctx.lineTo(botX - w * 0.055, h * 0.85);
+        ctx.closePath();
+        ctx.fill();
+    });
+    // 光束里的浮尘：缓缓下沉并左右轻摆
+    for (let i = 0; i < 10; i++) {
+        const drift = (frame * (0.15 + (i % 3) * 0.06) + i * 97) % (h * 0.8);
+        const dx = w * 0.5 + Math.sin(i * 2.3) * w * 0.05 + Math.sin(frame * 0.01 + i) * 6;
+        const dy = 20 + drift;
+        ctx.fillStyle = `rgba(220, 230, 255, ${0.25 + (i % 3) * 0.1})`;
+        ctx.beginPath();
+        ctx.arc(dx, dy, 1.1 + (i % 2) * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // 4. 钟乳石（洞顶垂下）与石笋（地面拔起）的剪影，勾出天然溶洞的轮廓
+    ctx.fillStyle = '#241c38';
+    for (let i = 0; i < 12; i++) {
+        const sx = ((i * 83 + 19) % 100) / 100 * w;
+        const sl = 16 + (i * 41 % 34);
+        const sw = 5 + (i % 4) * 2;
+        ctx.beginPath();
+        ctx.moveTo(sx - sw, 0);
+        ctx.lineTo(sx + sw, 0);
+        ctx.lineTo(sx, sl);
+        ctx.closePath();
+        ctx.fill();
+    }
+    // 石笋：左右两侧从地面向上拔起的尖锥（根部被地面层盖住）
+    [{ x: 0.04, len: 0.16 }, { x: 0.13, len: 0.1 }, { x: 0.9, len: 0.14 }, { x: 0.97, len: 0.09 }].forEach(s => {
+        const bx = s.x * w;
+        const top = h * (0.88 - s.len);
+        const sw = w * 0.016;
+        ctx.beginPath();
+        ctx.moveTo(bx - sw, h);
+        ctx.lineTo(bx + sw, h);
+        ctx.lineTo(bx, top);
+        ctx.closePath();
+        ctx.fill();
+    });
+
+    // 5. 巨型水晶簇：岩壁上四簇多面水晶，紫青交错，光晕随帧脉动——矿洞的招牌
+    // 单根水晶：六面柱形（顶尖 + 根部收窄）+ 白色棱线营造切面感
+    const crystal = (cx: number, cy: number, size: number, tilt: number, color: string, alpha: number) => {
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(tilt);
+        ctx.fillStyle = `rgba(${color}, ${alpha})`;
+        ctx.beginPath();
+        ctx.moveTo(0, -size * 1.7);
+        ctx.lineTo(size * 0.42, -size * 0.4);
+        ctx.lineTo(size * 0.3, size * 0.5);
+        ctx.lineTo(-size * 0.3, size * 0.5);
+        ctx.lineTo(-size * 0.42, -size * 0.4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.55})`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(0, -size * 1.7);
+        ctx.lineTo(size * 0.42, -size * 0.4);
+        ctx.moveTo(0, -size * 1.7);
+        ctx.lineTo(-size * 0.12, size * 0.4);
+        ctx.stroke();
+        ctx.restore();
+    };
+    const clusters = [
+        { x: 0.07, y: 0.72, color: '192, 132, 252', sizes: [22, 15, 10], tilt: -0.12 },
+        { x: 0.94, y: 0.66, color: '103, 232, 249', sizes: [19, 13, 9], tilt: 0.1 },
+        { x: 0.3, y: 0.1, color: '103, 232, 249', sizes: [10, 7], tilt: 0.2 },   // 洞顶倒挂
+        { x: 0.78, y: 0.16, color: '192, 132, 252', sizes: [9, 6], tilt: -0.18 }, // 洞顶倒挂
+    ];
+    clusters.forEach((c, ci) => {
+        const pulse = 0.55 + Math.sin(frame * 0.045 + ci * 1.7) * 0.25;
+        const cx = c.x * w, cy = c.y * h;
+        const hanging = c.y < 0.3; // 长在洞顶的水晶尖朝下
+        const haloR = 34 + c.sizes[0] * 2.2;
+        const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, haloR);
+        halo.addColorStop(0, `rgba(${c.color}, ${0.28 * pulse + 0.12})`);
+        halo.addColorStop(1, `rgba(${c.color}, 0)`);
+        ctx.fillStyle = halo;
+        ctx.fillRect(cx - haloR, cy - haloR, haloR * 2, haloR * 2);
+        c.sizes.forEach((size, si) => {
+            const ox = (si - (c.sizes.length - 1) / 2) * size * 0.75;
+            crystal(cx + ox, cy, size, (hanging ? Math.PI : 0) + c.tilt + (si - 1) * 0.16, c.color, 0.7 + pulse * 0.25);
+        });
+    });
+
+    // 6. 发光蘑菇：岩壁凹陷处几簇小蘑菇，青绿光晕一明一暗
+    const shrooms = [{ x: 0.2, y: 0.82, n: 3 }, { x: 0.68, y: 0.78, n: 2 }, { x: 0.85, y: 0.84, n: 3 }];
+    shrooms.forEach((s, si) => {
+        const glowPulse = 0.5 + Math.sin(frame * 0.05 + si * 2.4) * 0.3;
+        const mx = s.x * w, my = s.y * h;
+        const halo = ctx.createRadialGradient(mx, my, 0, mx, my, 26);
+        halo.addColorStop(0, `rgba(94, 234, 212, ${0.25 * glowPulse + 0.08})`);
+        halo.addColorStop(1, 'rgba(94, 234, 212, 0)');
+        ctx.fillStyle = halo;
+        ctx.fillRect(mx - 26, my - 26, 52, 52);
+        for (let i = 0; i < s.n; i++) {
+            const ox = (i - (s.n - 1) / 2) * 8;
+            const sh = 5 + ((i + si) % 3) * 2.5;
+            ctx.strokeStyle = 'rgba(190, 242, 230, 0.85)';
+            ctx.lineWidth = 1.6;
+            ctx.beginPath();
+            ctx.moveTo(mx + ox, my);
+            ctx.lineTo(mx + ox, my - sh);
+            ctx.stroke();
+            ctx.fillStyle = `rgba(45, 212, 191, ${0.75 + glowPulse * 0.25})`;
+            ctx.beginPath();
+            ctx.arc(mx + ox, my - sh, 3.4, Math.PI, 0);
+            ctx.closePath();
+            ctx.fill();
+        }
+    });
+
+    // 7. 漂浮光尘：洞里四处缓漂的萤火微粒，忽明忽暗
+    for (let i = 0; i < 14; i++) {
+        const px = ((i * 173 + 59) % 100) / 100 * w + Math.sin(frame * 0.008 + i * 1.9) * 14;
+        const py = ((i * 113 + 31) % 100) / 100 * h * 0.75 + h * 0.05 + Math.cos(frame * 0.011 + i * 2.7) * 10;
+        const tw = 0.3 + 0.7 * Math.abs(Math.sin(frame * 0.03 + i * 1.3));
+        ctx.fillStyle = i % 3 === 0 ? `rgba(192, 132, 252, ${0.5 * tw})` : `rgba(103, 232, 249, ${0.5 * tw})`;
+        ctx.beginPath();
+        ctx.arc(px, py, 1.4, 0, Math.PI * 2);
+        ctx.fill();
+    }
+};
+
 // === 城市背景 ===
 /*
   白天都市：湛蓝晴空 + 太阳 + 薄云 + 远近两排摩天楼（窗格/水塔/闪灯天线）+
@@ -2745,6 +2964,14 @@ const MINE_PLATFORMS: Platform[] = [
     { x: 1000, y: 370, width: 140, height: 22 }
 ];
 
+// 矿洞地图平台：天然水晶石台
+const CAVE_PLATFORMS: Platform[] = [
+    { x: 310, y: 460, width: 180, height: 22 },
+    { x: 790, y: 460, width: 180, height: 22 },
+    { x: 545, y: 305, width: 190, height: 22 },
+    { x: 990, y: 355, width: 150, height: 22 }
+];
+
 // 城市地图平台：楼顶混凝土检修台
 const CITY_PLATFORMS: Platform[] = [
     { x: 300, y: 470, width: 180, height: 22 },
@@ -2768,6 +2995,7 @@ const basePlatformsOf = (m: MapType): Platform[] =>
     : m === 'summit' ? SUMMIT_PLATFORMS
     : m === 'mine' ? MINE_PLATFORMS
     : m === 'city' ? CITY_PLATFORMS
+    : m === 'cave' ? CAVE_PLATFORMS
     : NEON_PLATFORMS;
 
 // ================= 每局随机地形 =================
@@ -2781,9 +3009,10 @@ interface Layout {
     spikes: Obstacle[];   // 伤害陷阱
     blocks: Obstacle[];   // 实心阻挡
     movers: Obstacle[];   // 移动平台
+    turrets: Obstacle[];  // 自动炮台（中立陷阱，见谁打谁）
 }
 
-const EMPTY_LAYOUT: Layout = { extras: [], spikes: [], blocks: [], movers: [] };
+const EMPTY_LAYOUT: Layout = { extras: [], spikes: [], blocks: [], movers: [], turrets: [] };
 
 // 生成参数：数量与尺寸都刻意保守，保证 7~8 岁小朋友一眼能看清地形
 const SPAWN_SAFE_X = 210;   // 出生点安全区：左右各 210px 内不放障碍
@@ -2805,7 +3034,7 @@ const hits = (a: Rect, b: Rect, pad: number) =>
 // 在基准坐标系里生成一局的地形
 const generateLayout = (m: MapType): Layout => {
     const taken: Rect[] = basePlatformsOf(m).map(p => ({ ...p }));
-    const layout: Layout = { extras: [], spikes: [], blocks: [], movers: [] };
+    const layout: Layout = { extras: [], spikes: [], blocks: [], movers: [], turrets: [] };
 
     // 在安全区内找一个不与已占用矩形冲突的位置
     const place = (w: number, h: number, yMin: number, yMax: number): Rect | null => {
@@ -2842,10 +3071,50 @@ const generateLayout = (m: MapType): Layout => {
         const w = rand(70, 130);
         const h = 20;
         const r = place(w, h, BASE_GROUND_Y - h, BASE_GROUND_Y - h);
-        if (r) layout.spikes.push({ kind: 'spike', x: r.x, y: r.y, width: r.width, height: r.height });
+        if (r) layout.spikes.push({ kind: 'spike', x: r.x, y: r.y, width: r.width, height: r.height, extend: 0 });
     }
 
-    // 4. 移动平台：0~2 个，横向或纵向往返
+    // 4. 自动炮台：固定 1 座（中立陷阱，蓄力后向最近的角色开炮）
+    //    约一半概率架到够宽的静态平台上——居高临下视野好，但台面小也容易被近身；
+    //    没合适台面时才落地
+    {
+        const w = 44, h = 38;
+        const pushTurret = (r: Rect) =>
+            layout.turrets.push({ kind: 'turret', x: r.x, y: r.y, width: r.width, height: r.height, charge: 0 });
+
+        // 能架炮台的台面：固定平台 + 追加平台，至少 110 宽
+        // （炮台 44，两边还得留给人站脚/起跳）；移动平台会动，架不了
+        const perches = [...basePlatformsOf(m), ...layout.extras]
+            .filter(p => p.width >= 110 && p.y >= 200); // 太高的台面贴近 HUD，不架
+
+        // 在台面上找位置：x 仍守出生点安全区，且与其它障碍保持间距
+        const tryPerch = (): boolean => {
+            for (const p of [...perches].sort(() => Math.random() - 0.5)) {
+                const x0 = Math.max(p.x, SPAWN_SAFE_X);
+                const x1 = Math.min(p.x + p.width - w, BASE_W - SPAWN_SAFE_X - w);
+                if (x1 < x0) continue;
+                for (let i = 0; i < PLACE_TRIES; i++) {
+                    const r: Rect = { x: rand(x0, x1), y: p.y - h, width: w, height: h };
+                    // 排除"脚下这块台面"本身：炮台就得贴着它放，不算冲突
+                    const under = (t: Rect) =>
+                        Math.abs(t.y - (r.y + r.height)) < 1 && r.x >= t.x && r.x + r.width <= t.x + t.width;
+                    if (taken.every(t => under(t) || !hits(r, t, PLACE_PAD))) {
+                        taken.push(r); pushTurret(r); return true;
+                    }
+                }
+            }
+            return false;
+        };
+        const tryGround = (): boolean => {
+            const r = place(w, h, BASE_GROUND_Y - h, BASE_GROUND_Y - h);
+            if (!r) return false;
+            pushTurret(r); return true;
+        };
+        // 一半概率先抢台面（抢不到再落地），另一半直接落地
+        if (Math.random() < 0.5) { tryPerch() || tryGround(); } else { tryGround() || tryPerch(); }
+    }
+
+    // 5. 移动平台：0~2 个，横向或纵向往返
     for (let i = 0, n = randInt(0, 2); i < n; i++) {
         // 横向移动的包络很宽（平台宽 + 两倍行程），一次放不下就换个尺寸/方向再试
         for (let attempt = 0; attempt < MOVER_TRIES; attempt++) {
@@ -2928,13 +3197,14 @@ const syncLayout = (m: MapType, canvasWidth: number) => {
     const blocks = baseLayout.blocks.map(scaleO);
     const spikes = baseLayout.spikes.map(scaleO);
     const movers = baseLayout.movers.map(scaleO);
+    const turrets = baseLayout.turrets.map(scaleO);
 
     platformCache = [
         ...basePlatformsOf(m).map(scaleP),
         ...extras,
         ...blocks, // 箱子顶面也可以站
     ];
-    layoutCache = { extras, spikes, blocks, movers };
+    layoutCache = { extras, spikes, blocks, movers, turrets };
     layoutCacheKey = key;
 };
 
@@ -3032,6 +3302,16 @@ const drawHeldWeapon = (ctx: CanvasRenderingContext2D, weapon: AnyWeaponId) => {
         ctx.fillRect(2, -15, 2, 5); // 天线
         ctx.fillStyle = '#f00';
         ctx.beginPath(); ctx.arc(5, -5, 2, 0, Math.PI*2); ctx.fill(); // 信号灯
+    } else if (weapon === 'artillery') {
+        // 炮兵遥控器：红色机身 + 天线 + 雷达屏 + 大红按钮
+        ctx.fillStyle = '#7f1d1d';
+        ctx.fillRect(0, -10, 12, 16);
+        ctx.fillStyle = '#000';
+        ctx.fillRect(2, -16, 2, 6); // 天线
+        ctx.fillStyle = '#22d3ee';
+        ctx.fillRect(2, -8, 8, 5); // 雷达屏
+        ctx.fillStyle = '#ef4444';
+        ctx.beginPath(); ctx.arc(6, 1, 2.5, 0, Math.PI*2); ctx.fill(); // 大红按钮
     } else if (weapon === 'pokemon') {
         // 精灵球
         ctx.fillStyle = 'red'; ctx.beginPath(); ctx.arc(0,0,6, Math.PI, 0); ctx.fill();
@@ -3166,6 +3446,7 @@ const OBSTACLE_PALETTE: Record<MapType, {
     summit:  { hazard: '#ef4444', hazardDark: '#7f1d1d', block: '#6b7280', blockTop: '#e8eef7', blockEdge: '#94a3b8', mover: '#57534e', moverEdge: '#ffd98e' },
     mine:    { hazard: '#ef4444', hazardDark: '#7f1d1d', block: '#5b4636', blockTop: '#7a6248', blockEdge: '#f59e0b', mover: '#4a3524', moverEdge: '#fbbf24' },
     city:    { hazard: '#ef4444', hazardDark: '#7f1d1d', block: '#64748b', blockTop: '#94a3b8', blockEdge: '#facc15', mover: '#475569', moverEdge: '#fbbf24' },
+    cave:    { hazard: '#e11d48', hazardDark: '#4c0519', block: '#4c4368', blockTop: '#6b5f94', blockEdge: '#a78bfa', mover: '#3b3352', moverEdge: '#67e8f9' },
 };
 
 // 绘制障碍：伤害陷阱（尖刺）/ 实心阻挡（箱子）/ 移动平台（带轨迹虚线）
@@ -3493,6 +3774,38 @@ const paintPlatforms = (
                 ctx.fill();
             });
         });
+    } else if (map === 'cave') {
+        // 矿洞：天然水晶石台——深紫灰岩体 + 裂纹，顶沿嵌一排紫青交替的发光晶芽
+        platforms.forEach(p => {
+            const rock = ctx.createLinearGradient(0, p.y, 0, p.y + p.height);
+            rock.addColorStop(0, '#5d5080');
+            rock.addColorStop(0.5, '#463c66');
+            rock.addColorStop(1, '#2f2847');
+            ctx.fillStyle = rock;
+            roundRectPath(ctx, p.x, p.y, p.width, p.height, 8);
+            ctx.fill();
+            // 岩石裂纹
+            ctx.strokeStyle = 'rgba(16, 12, 30, 0.5)';
+            ctx.lineWidth = 1.5;
+            for (let cx = p.x + 24; cx < p.x + p.width - 10; cx += 44) {
+                ctx.beginPath();
+                ctx.moveTo(cx, p.y + 6);
+                ctx.lineTo(cx - 4, p.y + p.height - 4);
+                ctx.stroke();
+            }
+            // 顶沿晶芽：石台是水晶"长"出来的
+            for (let kx = p.x + 10, ki = 0; kx < p.x + p.width - 8; kx += 22, ki++) {
+                const col = ki % 2 === 0 ? '192, 132, 252' : '103, 232, 249';
+                const kh = 5 + (ki % 3) * 2;
+                ctx.fillStyle = `rgba(${col}, 0.9)`;
+                ctx.beginPath();
+                ctx.moveTo(kx - 3, p.y);
+                ctx.lineTo(kx + 3, p.y);
+                ctx.lineTo(kx, p.y - kh);
+                ctx.closePath();
+                ctx.fill();
+            }
+        });
     } else if (map === 'city') {
         // 城市：混凝土检修台——水泥板 + 黄黑警示条纹顶沿 + 锚栓
         platforms.forEach(p => {
@@ -3572,25 +3885,45 @@ const drawObstacles = (
     ctx: CanvasRenderingContext2D,
     map: MapType,
     layout: Layout,
+    frame: number,
 ) => {
     const pal = OBSTACLE_PALETTE[map];
 
-    // 伤害陷阱：一排尖刺，底座压深色，尖刺朝上
+    // 伤害陷阱：隐蔽地刺——平时缩进地里只露一道地缝（细心能提前看出来），
+    // 有人靠近才弹出；弹出的高度按 extend 从地缝里"长"出来
     layout.spikes.forEach(sp => {
+        const baseY = sp.y + sp.height;
+        const ex = sp.extend ?? 0;
+
+        // 地缝 + 小孔洞：一直在，颜色压得很暗，是留给细心小朋友的破绽
+        ctx.fillStyle = 'rgba(0,0,0,0.45)';
+        roundRectPath(ctx, sp.x, baseY - 3, sp.width, 5, 2.5);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(0,0,0,0.22)';
+        for (let hx = sp.x + 8; hx < sp.x + sp.width - 6; hx += 16) {
+            roundRectPath(ctx, hx, baseY - 6, 4, 3, 1.5);
+            ctx.fill();
+        }
+
+        if (ex <= 0) return;
+
+        // 弹出的尖刺：底边始终贴地，高度 = 完整高度 × 弹出程度
+        const h = sp.height * ex;
+        const top = baseY - h;
         const teeth = Math.max(2, Math.round(sp.width / 18));
         const tw = sp.width / teeth;
 
         ctx.fillStyle = pal.hazardDark;
-        roundRectPath(ctx, sp.x, sp.y + sp.height - 6, sp.width, 6, 3);
+        roundRectPath(ctx, sp.x, baseY - 6, sp.width, 6, 3);
         ctx.fill();
 
         ctx.fillStyle = pal.hazard;
         ctx.beginPath();
         for (let i = 0; i < teeth; i++) {
             const x0 = sp.x + i * tw;
-            ctx.moveTo(x0, sp.y + sp.height);
-            ctx.lineTo(x0 + tw / 2, sp.y);
-            ctx.lineTo(x0 + tw, sp.y + sp.height);
+            ctx.moveTo(x0, baseY);
+            ctx.lineTo(x0 + tw / 2, top);
+            ctx.lineTo(x0 + tw, baseY);
         }
         ctx.closePath();
         ctx.fill();
@@ -3601,8 +3934,8 @@ const drawObstacles = (
         ctx.beginPath();
         for (let i = 0; i < teeth; i++) {
             const x0 = sp.x + i * tw;
-            ctx.moveTo(x0 + tw / 2, sp.y + 2);
-            ctx.lineTo(x0 + tw * 0.8, sp.y + sp.height);
+            ctx.moveTo(x0 + tw / 2, top + 2);
+            ctx.lineTo(x0 + tw * 0.8, baseY);
         }
         ctx.stroke();
     });
@@ -3675,6 +4008,55 @@ const drawObstacles = (
         edgeLine(pal.moverEdge, 3);
         ctx.restore();
     });
+
+    // 自动炮台：梯形基座 + 旋转炮管；蓄力过半警示灯闪红、炮口泛光，开火带后坐
+    layout.turrets.forEach(tu => {
+        const cx = tu.x + tu.width / 2;
+        const by = tu.y + tu.height;  // 底边（贴地/台面）
+        const headY = tu.y + 12;      // 炮塔头中心
+        // 基座（底宽顶窄的梯形）
+        ctx.fillStyle = '#3f3f46';
+        ctx.beginPath();
+        ctx.moveTo(tu.x, by);
+        ctx.lineTo(tu.x + tu.width, by);
+        ctx.lineTo(tu.x + tu.width - 8, headY);
+        ctx.lineTo(tu.x + 8, headY);
+        ctx.closePath();
+        ctx.fill();
+        // 警示灯：蓄力过半开始闪红
+        const charging = (tu.charge ?? 0) > 55;
+        const blinkOn = Math.floor(frame / 10) % 2 === 0;
+        ctx.fillStyle = charging && blinkOn ? '#ef4444' : '#7f1d1d';
+        ctx.beginPath();
+        ctx.arc(cx, by - 6, 3, 0, Math.PI * 2);
+        ctx.fill();
+        // 炮塔头（圆形转台）
+        ctx.fillStyle = '#52525b';
+        ctx.beginPath();
+        ctx.arc(cx, headY, 11, 0, Math.PI * 2);
+        ctx.fill();
+        // 炮管：随 aimAngle 旋转，开火后坐回缩
+        const ang = tu.aimAngle ?? -Math.PI / 2;
+        const len = 24 - (tu.recoil ?? 0);
+        ctx.save();
+        ctx.translate(cx, headY);
+        ctx.rotate(ang);
+        ctx.fillStyle = '#27272a';
+        roundRectPath(ctx, 0, -4, len, 8, 3);
+        ctx.fill();
+        ctx.fillStyle = '#71717a';
+        roundRectPath(ctx, len - 7, -5, 7, 10, 2); // 炮口箍
+        ctx.fill();
+        // 蓄力辉光：快开火时炮口越来越亮的橙光
+        if (charging) {
+            const glow = Math.min(1, ((tu.charge ?? 0) - 55) / 55);
+            ctx.fillStyle = `rgba(251, 146, 60, ${0.35 + glow * 0.5})`;
+            ctx.beginPath();
+            ctx.arc(len, 0, 4 + glow * 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.restore();
+    });
 };
 
 /*
@@ -3684,7 +4066,8 @@ const drawObstacles = (
   现在的结构（全部朝右画，靠 scale(-1,1) 翻转）：
   - 造型：腿长身子短（腿占身高近一半）、头是实心圆无眼睛、四肢同色无明暗。
   - 腿：胯 → 膝 → 脚 两段式。步行时摆动腿前摆且脚抬起（max(0,cos) 弧线），支撑腿踩地。
-  - 臂：肩 → 肘 → 手 两段式，永远画两条，手上画小拳头。
+  - 臂：肩 → 肘 → 手 两段式，永远画两条，手上画小拳头。走路摆臂与对侧腿反相、
+    略滞后于腿（钟摆惯性），手绕肩走弧线，前摆屈肘、后摆近直，幅度随速度变大。
   - 躯干：平时笔直不勾腰（走/跑/跳都不前倾），只有出拳时前倾一点。
   - 攻击：attackFrame 5→15 共 11 帧，前段手臂后拉蓄力，后段快速打直，躯干跟着前倾。
 */
@@ -3780,9 +4163,19 @@ const drawEntity = (ctx: CanvasRenderingContext2D, entity: Entity, frame: number
         if (!entity.isGrounded) { // 跳跃：双臂微张
             return [{ hx: -13, hy: 12, bend: 5 }, { hx: 14, hy: 10, bend: 5 }];
         }
-        if (walking) { // 与腿反相摆臂
-            const s = Math.sin(ph) * 9;
-            return [{ hx: -2 + s, hy: 16, bend: 3 }, { hx: 2 - s, hy: 16, bend: 3 }];
+        if (walking) { // 摆臂：与"对侧腿"反相（左臂配右腿），带钟摆滞后、手部弧线和肘部开合
+            const amp = 6 + Math.min(6, speedX * 0.5); // 走得越快摆得越开
+            return [0, 1].map(i => {
+                // 同侧腿相位是 ph + iπ；手臂取反相，再滞后 0.3 弧度模拟手臂的钟摆惯性
+                const t = ph + (i + 1) * Math.PI - 0.3;
+                const fwd = Math.sin(t); // >0 表示手正摆向前方
+                return {
+                    hx: (i === 0 ? -2 : 2) + fwd * amp,
+                    // 手绕肩走弧线：摆到前后两端都会抬高，前摆屈肘更多所以抬得更高
+                    hy: 17 - Math.abs(fwd) * 3 - Math.max(0, fwd) * 2,
+                    bend: 2 + Math.max(0, fwd) * 3.5, // 前摆屈肘、后摆臂近直
+                };
+            });
         }
         const sway = Math.sin(frame * 0.045) * 1.5; // 站立：随呼吸轻摆
         return [{ hx: -7, hy: 19 + sway, bend: 3 }, { hx: 7, hy: 19 - sway, bend: 3 }];
@@ -4013,6 +4406,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
     if (self.heldWeapon === 'missile') attackRange = 700;
     if (self.heldWeapon === 'dragon') attackRange = 400;
     if (self.heldWeapon === 'bomber') attackRange = 800;
+    if (self.heldWeapon === 'artillery') attackRange = 800;
     if (self.heldWeapon === 'pokemon') attackRange = 800;
     if (self.heldWeapon === 'laser') attackRange = 1000;
     if (self.heldWeapon === 'zeperion') attackRange = 1000;
@@ -4372,7 +4766,19 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
       if (coopBannerRef.current.life <= 0) coopBannerRef.current = null;
     }
 
-    if (gameState !== GameState.PLAYING && gameState !== GameState.VICTORY_ANIMATION) return;
+    // 统一关停喷气持续声。持续声平时靠实体循环里的边沿检测来关，
+    // 一旦实体循环不再跑到那段（胜利动画 / 结算 / 菜单），不主动掐掉
+    // 就会一路"嗡嗡"漏到结算和菜单界面
+    const stopAllJetSounds = () => {
+        if (jetActiveRef.current.size === 0) return;
+        jetActiveRef.current.forEach(() => stopJetSound());
+        jetActiveRef.current.clear();
+    };
+
+    if (gameState !== GameState.PLAYING && gameState !== GameState.VICTORY_ANIMATION) {
+        stopAllJetSounds(); // 兜底：对局外的每一帧都确保喷气声是关的
+        return;
+    }
 
     const platforms = getPlatforms(map, canvas.width);
 
@@ -4386,8 +4792,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
         if (statsRef.current.winner) return;
 
         // 裁决后实体不再处理输入（胜利动画提前 return），喷气声在这里统一关掉
-        jetActiveRef.current.forEach(() => stopJetSound());
-        jetActiveRef.current.clear();
+        stopAllJetSounds();
 
         // COOP：只判"全军覆没 = 闯关失败"。清空怪物不算胜负，
         // 交给下面的波次状态机推进（最后一关清空才宣布胜利）。
@@ -4660,6 +5065,28 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
             }
             
             proj.pos.x += proj.vel.x;
+            return;
+        }
+
+        // --- 炮兵齐射：标记锁定 80 帧 → 炮弹从天上齐落（复用手雷的落地爆炸分支） ---
+        if (proj.type === 'artillery') {
+            proj.artilleryTimer = (proj.artilleryTimer || 0) + 1;
+            if (proj.artilleryState === 'marking' && proj.artilleryTimer >= 80) {
+                proj.artilleryState = 'firing';
+                (proj.artilleryMarks || []).forEach(m => {
+                    projectilesRef.current.push({
+                        id: Math.random().toString(),
+                        type: 'bomb',
+                        pos: { x: m.x + (Math.random() - 0.5) * 30, y: -20 - Math.random() * 40 },
+                        vel: { x: 0, y: 13 },
+                        ownerId: proj.ownerId,
+                        width: 20, height: 20, active: true,
+                        damage: proj.damage,
+                        blastRadius: proj.blastRadius
+                    });
+                });
+                proj.active = false; // 遥控任务完成，控制器退场
+            }
             return;
         }
 
@@ -5322,6 +5749,61 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
       mv.dy = mv.y - prevY;
     });
 
+    // === 3.5 自动炮台：索敌 → 蓄力 → 开火（中立陷阱，见谁打谁） ===
+    layout.turrets.forEach(tu => {
+      tu.recoil = Math.max(0, (tu.recoil ?? 0) - 0.5); // 后坐回弹
+      const muzzleX = tu.x + tu.width / 2;
+      const muzzleY = tu.y + 12;
+      // 找最近的存活角色：炮台是中立机关，双方都是目标（COOP 的怪物也照打）
+      let best: Entity | undefined;
+      let bestD = Infinity;
+      for (const e of entitiesRef.current) {
+        if (e.isDead) continue;
+        const d = Math.hypot(e.pos.x - muzzleX, (e.pos.y - 40) - muzzleY);
+        if (d < bestD) { bestD = d; best = e; }
+      }
+      if (!best || bestD > 430) { tu.charge = 0; return; } // 无人或超程：熄火休息
+      const targetAng = Math.atan2((best.pos.y - 40) - muzzleY, best.pos.x - muzzleX);
+      // 炮管平滑追踪目标（慢一点才显得"沉"，也给对面反应时间）
+      tu.aimAngle = tu.aimAngle === undefined ? targetAng : tu.aimAngle + (targetAng - tu.aimAngle) * 0.1;
+      tu.charge = (tu.charge ?? 0) + 1;
+      if (tu.charge >= 110) { // 索敌蓄力约 1.8 秒打一发
+        tu.charge = 0;
+        playShootSound();
+        const ang = tu.aimAngle;
+        const speed = 9; // 比跑步慢，小朋友跑得开
+        projectilesRef.current.push({
+          id: Math.random().toString(),
+          type: 'gatling', // 复用直线子弹分支（伤害/颜色已烘焙在弹上）
+          pos: { x: muzzleX + Math.cos(ang) * 24, y: muzzleY + Math.sin(ang) * 24 },
+          vel: { x: Math.cos(ang) * speed, y: Math.sin(ang) * speed },
+          ownerId: '', // 中立陷阱弹：不属于任何人，见谁打谁
+          width: 8, height: 8, active: true,
+          damage: 7,
+          tint: '#f97316' // 橙色弹，和玩家武器区分开
+        });
+        spawnParticles(muzzleX + Math.cos(ang) * 26, muzzleY + Math.sin(ang) * 26, '#fbbf24', 6, 5); // 炮口火光
+        tu.recoil = 6;
+      }
+    });
+
+    // === 3.6 隐蔽地刺：平时缩进地里，有人靠近才"唰"地弹出，人走了慢慢缩回 ===
+    layout.spikes.forEach(sp => {
+      const baseY = sp.y + sp.height;
+      const near = entitiesRef.current.some(e => !e.isDead &&
+        e.pos.x > sp.x - 90 && e.pos.x < sp.x + sp.width + 90 &&
+        Math.abs(e.pos.y - baseY) < 130);
+      if (near) {
+        if ((sp.extend ?? 0) === 0) { // 弹出的瞬间：唰的一声 + 蹦出一把碎土
+          playAttackSound();
+          spawnParticles(sp.x + sp.width / 2, baseY - 2, '#8a7a5a', 8, 5);
+        }
+        sp.extend = Math.min(1, (sp.extend ?? 0) + 0.2);  // 快速弹出（约 5 帧）
+      } else {
+        sp.extend = Math.max(0, (sp.extend ?? 0) - 0.03); // 慢慢缩回（约 33 帧）
+      }
+    });
+
     // === 4. 实体更新 ===
     entitiesRef.current.forEach(entity => {
       // 检查武器是否过期
@@ -5512,11 +5994,15 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
 
       if (gameState === GameState.VICTORY_ANIMATION || entity.isDead || entity.stunFrames > 0) return;
 
-      // 伤害陷阱：踩到掉血 + 被弹开，靠 spikeCooldown 保证不会被瞬间抽干
+      // 伤害陷阱：隐蔽地刺——弹出过半才有杀伤，踩到掉血 + 被弹开，
+      // 靠 spikeCooldown 保证不会被瞬间抽干
       if (entity.spikeCooldown === 0) {
           for (const sp of layout.spikes) {
+              const ex = sp.extend ?? 0;
+              if (ex < 0.5) continue; // 缩在地里 / 刚冒头时没有杀伤
+              const teethTop = sp.y + sp.height * (1 - ex);
               const onX = entity.pos.x + BODY_HALF_W > sp.x && entity.pos.x - BODY_HALF_W < sp.x + sp.width;
-              const onY = entity.pos.y >= sp.y - 8 && entity.pos.y <= sp.y + sp.height + 24;
+              const onY = entity.pos.y >= teethTop - 8 && entity.pos.y <= sp.y + sp.height + 24;
               if (!onX || !onY) continue;
 
               entity.health = Math.max(0, entity.health - SPIKE_DAMAGE);
@@ -5524,7 +6010,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
               entity.stunFrames = 14;
               entity.vel.y = -13;
               entity.vel.x = (entity.pos.x < sp.x + sp.width / 2 ? -1 : 1) * 11;
-              spawnParticles(entity.pos.x, sp.y + 6, '#ef4444', 14, 7);
+              spawnParticles(entity.pos.x, teethTop + 6, '#ef4444', 14, 7);
               playHitSound();
               shakeRef.current = Math.max(shakeRef.current, 10);
 
@@ -5601,8 +6087,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
               spawnParticles(backX, entity.pos.y - 46, Math.random() < 0.5 ? '#fbbf24' : '#fb923c', 2, 6, 0.6, 2.5);
           }
       }
-      // 音效边沿检测：开始喷才开声，松手/燃料耗尽才关声
-      if (entity.jetThrusting && !jetActiveRef.current.has(entity.id)) {
+      // 音效边沿检测：开始喷才开声，松手/燃料耗尽才关声。
+      // 已宣判的局（平局/团灭后等结算的 2.2 秒）不再开声——
+      // 裁决时已统一关停，这里再开就没有人负责关了，会漏到结算界面
+      if (entity.jetThrusting && !statsRef.current.winner && !jetActiveRef.current.has(entity.id)) {
           jetActiveRef.current.add(entity.id);
           startJetSound();
       } else if (!entity.jetThrusting && jetActiveRef.current.has(entity.id)) {
@@ -5692,6 +6180,35 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
                   bombDropCount: 0,
                   damage: bomberSt.damage,
                   blastRadius: bomberSt.blastRadius
+              });
+              entity.ammo--;
+          } else if (entity.heldWeapon === 'artillery') {
+              // 炮兵齐射：无线电锁定敌人当前位置（快照），标记闪烁 80 帧后炮弹齐落
+              playShootSound(); // 无线电呼叫声
+              const st = getBuiltinStats('artillery');
+              const marks: Vector[] = entitiesRef.current
+                  .filter(e => !e.isDead && e.id !== entity.id && isHostile(entity, e))
+                  .map(e => ({ x: e.pos.x, y: e.pos.y }));
+              // 补满 5 个炮击点：围绕锁定点的散布 + 纯随机，封对面走位
+              while (marks.length < 5) {
+                  const near = marks.length > 0 && Math.random() < 0.6
+                      ? marks[Math.floor(Math.random() * marks.length)] : null;
+                  const x = near ? near.x + (Math.random() - 0.5) * 280
+                                 : 120 + Math.random() * (canvas.width - 240);
+                  marks.push({ x: Math.min(canvas.width - 40, Math.max(40, x)), y: GROUND_Y });
+              }
+              projectilesRef.current.push({
+                  id: Math.random().toString(),
+                  type: 'artillery',
+                  pos: { x: entity.pos.x, y: entity.pos.y - 40 },
+                  vel: { x: 0, y: 0 },
+                  ownerId: entity.id,
+                  width: 10, height: 10, active: true,
+                  artilleryState: 'marking',
+                  artilleryMarks: marks,
+                  artilleryTimer: 0,
+                  damage: st.damage,
+                  blastRadius: st.blastRadius
               });
               entity.ammo--;
           } else if (entity.heldWeapon === 'pokemon') {
@@ -6162,12 +6679,14 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
       if (players.every(p => p.isDead)) {
         // 全军覆没：闯关失败（resolveOutcome 通常已判过，这里兜底）
         statsRef.current.winner = 'ENEMIES';
+        stopAllJetSounds();
         winTimeoutRef.current = window.setTimeout(() => setGameState(GameState.GAME_OVER), 2200);
       } else if (waveStateRef.current === 'fighting' && enemies.length > 0 && enemies.every(e => e.isDead)) {
         if (waveRef.current >= COOP_TOTAL_WAVES) {
-          // 通关！所有活着的玩家一起上台庆祝
+          // 通关！所有活着的玩家一起上台庆祝（这条路径不经 resolveOutcome，喷气声就地关停）
           entitiesRef.current.forEach(e => { if (e.team === 'player' && !e.isDead) e.isWinner = true; });
           statsRef.current.winner = 'PLAYERS';
+          stopAllJetSounds();
           victoryFrameRef.current = 0;
           setGameState(GameState.VICTORY_ANIMATION);
           winTimeoutRef.current = window.setTimeout(() => setGameState(GameState.GAME_OVER), 4000);
@@ -6254,6 +6773,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
           drawMineBackground(ctx, canvas.width, canvas.height, frameRef.current);
       } else if (map === 'city') {
           drawCityBackground(ctx, canvas.width, canvas.height, frameRef.current);
+      } else if (map === 'cave') {
+          drawCaveBackground(ctx, canvas.width, canvas.height, frameRef.current);
       } else {
           drawNeonBackground(ctx, canvas.width, canvas.height, frameRef.current);
       }
@@ -6667,6 +7188,58 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
               ctx.arc(gx, gy, 1.2, 0, Math.PI * 2);
               ctx.fill();
           }
+      } else if (map === 'cave') {
+          // 矿洞地面：紫黑岩地 + 嵌地水晶簇 + 一洼地下暗河（波光缓缓扫过水面）
+          const groundGrad = ctx.createLinearGradient(0, GROUND_Y, 0, canvas.height);
+          groundGrad.addColorStop(0, '#3b3252');
+          groundGrad.addColorStop(0.5, '#2c2540');
+          groundGrad.addColorStop(1, '#191426');
+          ctx.fillStyle = groundGrad;
+          ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
+          // 顶沿碎石棱
+          ctx.fillStyle = '#4c4166';
+          ctx.fillRect(0, GROUND_Y, canvas.width, 6);
+          ctx.fillStyle = '#5d5080';
+          for (let x = 0; x < canvas.width; x += 38) {
+              const gw = 9 + (x / 38 % 3) * 5;
+              ctx.fillRect(x, GROUND_Y - 2, gw, 4);
+          }
+          // 嵌地水晶簇：几丛紫青小水晶从岩地里长出来
+          for (let i = 0; i < 6; i++) {
+              const gx = ((i * 167 + 53) % 100) / 100 * canvas.width;
+              const gy = GROUND_Y + 24 + (i * 23 % 20);
+              const col = i % 2 === 0 ? '192, 132, 252' : '103, 232, 249';
+              for (let j = 0; j < 3; j++) {
+                  const ox = (j - 1) * 6;
+                  const ch = 7 - Math.abs(j - 1) * 2.5;
+                  ctx.fillStyle = `rgba(${col}, 0.85)`;
+                  ctx.beginPath();
+                  ctx.moveTo(gx + ox - 2.5, gy);
+                  ctx.lineTo(gx + ox + 2.5, gy);
+                  ctx.lineTo(gx + ox, gy - ch);
+                  ctx.closePath();
+                  ctx.fill();
+              }
+          }
+          // 地下暗河：右侧一洼水潭，两条波光缓缓扫过
+          const poolW = canvas.width * 0.26;
+          const poolX = canvas.width * 0.7;
+          const poolY = GROUND_Y + (canvas.height - GROUND_Y) * 0.55;
+          const pool = ctx.createLinearGradient(0, poolY - 9, 0, poolY + 9);
+          pool.addColorStop(0, '#1d2d4a');
+          pool.addColorStop(1, '#0c1526');
+          ctx.fillStyle = pool;
+          ctx.beginPath();
+          ctx.ellipse(poolX + poolW / 2, poolY, poolW / 2, 9, 0, 0, Math.PI * 2);
+          ctx.fill();
+          for (let i = 0; i < 2; i++) {
+              const shimX = poolX + ((frameRef.current * (0.5 + i * 0.3) + i * 120) % (poolW + 60)) - 30;
+              ctx.strokeStyle = `rgba(147, 197, 253, ${0.35 - i * 0.12})`;
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.ellipse(shimX, poolY - 2 + i * 4, 16, 2.5, 0, 0, Math.PI * 2);
+              ctx.stroke();
+          }
       } else if (map === 'city') {
           // 城市街道：人行道缘石 + 沥青路面 + 白色虚线车道 + 斑马线 + 井盖
           // 人行道（浅灰缘石）
@@ -6752,7 +7325,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
       }
 
       // Draw Obstacles（随机地形：陷阱 / 箱子 / 移动平台，画在角色身后）
-      drawObstacles(ctx, map, getLayout(map, canvas.width));
+      drawObstacles(ctx, map, getLayout(map, canvas.width), frameRef.current);
 
       // 胜利聚光灯 + 开场扩散光环（画在角色身后）
       if (gameState === GameState.VICTORY_ANIMATION) {
@@ -6809,9 +7382,15 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
         } else if (item.type === 'dragon') {
              ctx.font='24px serif'; ctx.fillText('🐉', -12, 8);
         } else if (item.type === 'bomber') {
-             ctx.fillStyle = '#4b5563'; ctx.fillRect(-10, -10, 20, 14); 
-             ctx.fillStyle = '#ef4444'; ctx.beginPath(); ctx.arc(5,-5,3,0,Math.PI*2); ctx.fill(); 
-             ctx.fillRect(5, -18, 2, 8); 
+             ctx.fillStyle = '#4b5563'; ctx.fillRect(-10, -10, 20, 14);
+             ctx.fillStyle = '#ef4444'; ctx.beginPath(); ctx.arc(5,-5,3,0,Math.PI*2); ctx.fill();
+             ctx.fillRect(5, -18, 2, 8);
+        } else if (item.type === 'artillery') {
+             // 炮兵遥控器图标：红机身 + 雷达屏 + 大按钮 + 天线
+             ctx.fillStyle = '#7f1d1d'; ctx.fillRect(-8, -9, 16, 18);
+             ctx.fillStyle = '#22d3ee'; ctx.fillRect(-5, -6, 10, 6);
+             ctx.fillStyle = '#ef4444'; ctx.beginPath(); ctx.arc(0, 4, 3, 0, Math.PI*2); ctx.fill();
+             ctx.fillStyle = '#000'; ctx.fillRect(4, -16, 2, 7);
         } else if (item.type === 'pokemon') {
              // 精灵球图标
              ctx.fillStyle = 'red'; ctx.beginPath(); ctx.arc(0,0,10, Math.PI, 0); ctx.fill();
@@ -6930,20 +7509,227 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, setSta
       // Draw Projectiles
       projectilesRef.current.forEach(proj => {
            if (proj.type === 'dragon' && proj.dragonSegments) {
-                ctx.strokeStyle = '#fbbf24'; 
-                ctx.lineWidth = 20;
-                ctx.lineCap = 'round';
-                ctx.lineJoin = 'round';
-                ctx.beginPath();
-                if (proj.dragonSegments.length > 0) {
-                     ctx.moveTo(proj.dragonSegments[0].x, proj.dragonSegments[0].y);
-                     for(let i=1; i<proj.dragonSegments.length; i++) {
-                         ctx.lineTo(proj.dragonSegments[i].x, proj.dragonSegments[i].y);
-                     }
+                // === 神龙绘制：金鳞细尾 + 火焰背鳍 + 鹿角龙须的侧影龙头 ===
+                const segs = proj.dragonSegments;
+                const n = segs.length;
+                const headAng = Math.atan2(proj.vel.y, proj.vel.x);
+                const fr = frameRef.current;
+                const bodyR = (i: number) => 13 - (i / (n - 1)) * 9; // 身体往尾部逐渐变细
+
+                // 0. 神性辉光：头部一圈淡淡的金晕
+                const aura = ctx.createRadialGradient(proj.pos.x, proj.pos.y, 0, proj.pos.x, proj.pos.y, 70);
+                aura.addColorStop(0, 'rgba(251, 191, 36, 0.35)');
+                aura.addColorStop(1, 'rgba(251, 191, 36, 0)');
+                ctx.fillStyle = aura;
+                ctx.fillRect(proj.pos.x - 70, proj.pos.y - 70, 140, 140);
+
+                // 1. 尾鳍：尾巴尖一撮三瓣火焰红鳍，随游动轻摆
+                const tail = segs[n - 1], preTail = segs[n - 2];
+                const tang = Math.atan2(tail.y - preTail.y, tail.x - preTail.x);
+                ctx.save();
+                ctx.translate(tail.x, tail.y);
+                ctx.rotate(tang + Math.sin(fr * 0.2) * 0.25);
+                ctx.fillStyle = '#ef4444';
+                for (let f = -1; f <= 1; f++) {
+                    ctx.beginPath();
+                    ctx.moveTo(0, 0);
+                    ctx.quadraticCurveTo(8, f * 6 - 2, 16, f * 9);
+                    ctx.quadraticCurveTo(8, f * 6 + 2, 0, 0);
+                    ctx.closePath();
+                    ctx.fill();
                 }
+                ctx.restore();
+
+                // 2. 身体：从尾到头一节节画圆，金鳞深浅交替出鳞节感
+                for (let i = n - 1; i >= 1; i--) {
+                    const s = segs[i];
+                    ctx.fillStyle = i % 2 === 0 ? '#fbbf24' : '#f59e0b';
+                    ctx.beginPath();
+                    ctx.arc(s.x, s.y, bodyR(i), 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // 3. 背鳍：沿脊柱一排火焰状红鳍（朝背侧，高低错落成锯齿脊）
+                for (let i = 1; i < n - 1; i++) {
+                    const prev = segs[i - 1], next = segs[i + 1];
+                    let nx = -(next.y - prev.y), ny = next.x - prev.x;
+                    const nl = Math.hypot(nx, ny) || 1;
+                    nx /= nl; ny /= nl;
+                    if (ny > 0) { nx = -nx; ny = -ny; } // 鳍尽量朝上
+                    const r = bodyR(i);
+                    const fin = (9 - (i / (n - 1)) * 4) * (i % 2 === 0 ? 1 : 0.7);
+                    const bx = segs[i].x + nx * (r - 1);
+                    const by = segs[i].y + ny * (r - 1);
+                    ctx.fillStyle = i % 2 === 0 ? '#ef4444' : '#f97316';
+                    ctx.beginPath();
+                    ctx.moveTo(bx + ny * 3.5, by - nx * 3.5);
+                    ctx.lineTo(bx - ny * 3.5, by + nx * 3.5);
+                    ctx.lineTo(bx + nx * (r * 0.4 + fin), by + ny * (r * 0.4 + fin));
+                    ctx.closePath();
+                    ctx.fill();
+                }
+
+                // 4. 龙爪：腹侧两只三趾小爪，划水般轻摆
+                [3, 10].forEach(idx => {
+                    const s = segs[idx];
+                    const prev = segs[idx - 1], next = segs[idx + 1];
+                    let ux = -(next.y - prev.y), uy = next.x - prev.x;
+                    const ul = Math.hypot(ux, uy) || 1;
+                    ux /= ul; uy /= ul;
+                    if (uy > 0) { ux = -ux; uy = -uy; } // u 指背侧，腹侧为 -u
+                    const fl = Math.hypot(prev.x - s.x, prev.y - s.y) || 1;
+                    const fx = (prev.x - s.x) / fl, fy = (prev.y - s.y) / fl;
+                    const r = bodyR(idx);
+                    const paddle = Math.sin(fr * 0.15 + idx) * 2.5;
+                    const shX = s.x - ux * (r - 3), shY = s.y - uy * (r - 3);
+                    const elX = shX - ux * 9 + fx * 3, elY = shY - uy * 9 + fy * 3 + paddle;
+                    ctx.strokeStyle = '#f59e0b';
+                    ctx.lineWidth = 4.5;
+                    ctx.lineCap = 'round';
+                    ctx.beginPath();
+                    ctx.moveTo(shX, shY);
+                    ctx.lineTo(elX, elY);
+                    ctx.stroke();
+                    ctx.strokeStyle = '#fff7ed';
+                    ctx.lineWidth = 2;
+                    for (let toe = -1; toe <= 1; toe++) {
+                        ctx.beginPath();
+                        ctx.moveTo(elX, elY);
+                        ctx.lineTo(elX - ux * 5 + fx * (4 + toe * 2.5), elY - uy * 5 + fy * (4 + toe * 2.5));
+                        ctx.stroke();
+                    }
+                });
+
+                // 5. 龙头：侧面剪影朝运动方向；朝左飞时上下翻转，保证鹿角永远朝上
+                ctx.save();
+                ctx.translate(proj.pos.x, proj.pos.y);
+                ctx.rotate(headAng);
+                if (Math.abs(headAng) > Math.PI / 2) ctx.scale(1, -1);
+
+                // 鬃毛：脑后三撮火焰红鬃，随游动向后飘
+                ctx.fillStyle = '#dc2626';
+                for (let i = 0; i < 3; i++) {
+                    const wave = Math.sin(fr * 0.2 + i * 1.2) * 2.5;
+                    const bx = -8 - i * 6, by = -7 + i * 7;
+                    ctx.beginPath();
+                    ctx.moveTo(bx + 5, by - 4);
+                    ctx.quadraticCurveTo(bx - 7 + wave, by - 1, bx - 13 + wave, by + 1);
+                    ctx.quadraticCurveTo(bx - 5, by + 4, bx + 3, by + 5);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+
+                // 鹿角：头顶向后上方伸展的分枝角（神龙的标志）
+                ctx.strokeStyle = '#fde68a';
+                ctx.lineWidth = 2.8;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.moveTo(-2, -8);
+                ctx.quadraticCurveTo(-11, -15, -19, -17);
                 ctx.stroke();
-                ctx.fillStyle = '#ef4444'; 
-                ctx.beginPath(); ctx.arc(proj.pos.x, proj.pos.y - 10, 5, 0, Math.PI*2); ctx.fill();
+                ctx.beginPath();
+                ctx.moveTo(-8.5, -13);
+                ctx.lineTo(-10, -20);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(-13.5, -15.5);
+                ctx.lineTo(-16, -22);
+                ctx.stroke();
+
+                // 头颅 + 前伸的吻部
+                ctx.fillStyle = '#fbbf24';
+                ctx.beginPath();
+                ctx.ellipse(0, 0, 12.5, 9.5, 0, 0, Math.PI * 2);
+                ctx.fill();
+                roundRectPath(ctx, 6, -5, 14, 9, 3);
+                ctx.fill();
+
+                // 张开的嘴：暗红口腔 + 上颚尖牙 + 张开的下颚
+                ctx.fillStyle = '#7f1d1d';
+                ctx.beginPath();
+                ctx.moveTo(7, 3.5);
+                ctx.lineTo(20, 3);
+                ctx.lineTo(11, 10);
+                ctx.closePath();
+                ctx.fill();
+                ctx.fillStyle = '#fff7ed';
+                ctx.beginPath();
+                ctx.moveTo(14, 3.2);
+                ctx.lineTo(17.5, 3.1);
+                ctx.lineTo(15.8, 6.8);
+                ctx.closePath();
+                ctx.fill();
+                ctx.save();
+                ctx.translate(8, 7.5);
+                ctx.rotate(0.42);
+                ctx.fillStyle = '#f59e0b';
+                roundRectPath(ctx, 0, 0, 11, 4, 2);
+                ctx.fill();
+                ctx.restore();
+
+                // 龙须：吻端两根长须向后飘舞（正弦摆动）
+                ctx.strokeStyle = '#fde68a';
+                ctx.lineWidth = 1.8;
+                [-1, 1].forEach(side => {
+                    const w1 = Math.sin(fr * 0.15 + side) * 4;
+                    const w2 = Math.cos(fr * 0.12 + side * 2) * 5;
+                    ctx.beginPath();
+                    ctx.moveTo(17, side * 2.5 - 1);
+                    ctx.quadraticCurveTo(6, side * (9 + w1) - 2, -9, side * (13 + w2) - 2);
+                    ctx.stroke();
+                });
+
+                // 眼睛：白底黑瞳 + 斜立怒眉，再点个鼻孔
+                ctx.fillStyle = '#fff';
+                ctx.beginPath(); ctx.arc(2, -4, 3.2, 0, Math.PI * 2); ctx.fill();
+                ctx.fillStyle = '#1c1917';
+                ctx.beginPath(); ctx.arc(3.2, -4, 1.6, 0, Math.PI * 2); ctx.fill();
+                ctx.strokeStyle = '#b45309';
+                ctx.lineWidth = 2;
+                ctx.beginPath(); ctx.moveTo(-2.5, -8.5); ctx.lineTo(5, -6.8); ctx.stroke();
+                ctx.fillStyle = '#b45309';
+                ctx.beginPath(); ctx.arc(16.5, -3, 1.2, 0, Math.PI * 2); ctx.fill();
+
+                ctx.restore();
+                return;
+           }
+
+           if (proj.type === 'artillery') {
+                // 炮击标记：地面红圈准星 + 中心红点 + 顶部告警三角，最后 30 帧加速闪烁
+                if (proj.artilleryState === 'marking' && proj.artilleryMarks) {
+                    const t = proj.artilleryTimer || 0;
+                    const urgent = t > 50;
+                    const blink = Math.sin(frameRef.current * (urgent ? 0.55 : 0.22));
+                    if (blink > -0.3) {
+                        proj.artilleryMarks.forEach(m => {
+                            ctx.strokeStyle = `rgba(239, 68, 68, ${urgent ? 0.95 : 0.7})`;
+                            ctx.lineWidth = 2.5;
+                            ctx.beginPath();
+                            ctx.ellipse(m.x, m.y, 16, 5.5, 0, 0, Math.PI * 2);
+                            ctx.stroke();
+                            // 准星十字
+                            ctx.beginPath();
+                            ctx.moveTo(m.x - 24, m.y); ctx.lineTo(m.x - 9, m.y);
+                            ctx.moveTo(m.x + 9, m.y); ctx.lineTo(m.x + 24, m.y);
+                            ctx.moveTo(m.x, m.y - 13); ctx.lineTo(m.x, m.y - 4);
+                            ctx.moveTo(m.x, m.y + 4); ctx.lineTo(m.x, m.y + 13);
+                            ctx.stroke();
+                            // 中心红点
+                            ctx.fillStyle = '#ef4444';
+                            ctx.beginPath();
+                            ctx.arc(m.x, m.y, 2.5, 0, Math.PI * 2);
+                            ctx.fill();
+                            // 顶部告警三角（告急时上下跳）
+                            const triY = m.y - 30 - (urgent ? Math.abs(blink) * 4 : 0);
+                            ctx.beginPath();
+                            ctx.moveTo(m.x - 6, triY);
+                            ctx.lineTo(m.x + 6, triY);
+                            ctx.lineTo(m.x, triY + 8);
+                            ctx.closePath();
+                            ctx.fill();
+                        });
+                    }
+                }
                 return;
            }
 
